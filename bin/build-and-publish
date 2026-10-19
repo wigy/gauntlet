@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Build the Gauntlet Docker image and push it to Docker Hub as dataplug/gauntlet:VERSION and :latest.
+#
+# Usage: bin/build-and-publish [VERSION]     (default: version from package.json)
+#
+# Uses the current `docker login` unless DOCKER_USER and DOCKER_PASSWORD are set.
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
+
+VERSION="${1:-$(node -p "require('./package.json').version")}"
+IMAGE="${DOCKER_REPO:-dataplug/gauntlet}"
+
+log() { echo "[build-and-publish] $*"; }
+
+if [ -n "${DOCKER_USER:-}" ] && [ -n "${DOCKER_PASSWORD:-}" ]; then
+  log "Logging in to Docker Hub as $DOCKER_USER..."
+  echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USER" --password-stdin
+fi
+
+log "Building $IMAGE:$VERSION..."
+docker build -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
+
+log "Pushing $IMAGE:$VERSION and $IMAGE:latest..."
+docker push "$IMAGE:$VERSION"
+docker push "$IMAGE:latest"
+
+log "Done."

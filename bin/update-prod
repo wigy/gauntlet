@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Update the deployed Gauntlet on the dataplug server: pull dataplug/gauntlet:latest and restart its container.
+# Running games are lost (the server keeps them in memory); saved players and levels are in ~/.gauntlet there.
+#
+# Usage: bin/update-prod
+#
+# Environment:
+#   GAUNTLET_SERVER  SSH host (default: ai-meccg.com, the dataplug server)
+#   GAUNTLET_PATH    dataplug checkout on the server (default: /home/wigy/dataplug)
+set -euo pipefail
+
+GAUNTLET_SERVER="${GAUNTLET_SERVER:-ai-meccg.com}"
+GAUNTLET_PATH="${GAUNTLET_PATH:-/home/wigy/dataplug}"
+
+echo "[update-prod] Updating $GAUNTLET_SERVER:$GAUNTLET_PATH..."
+ssh "$GAUNTLET_SERVER" bash -s -- "$GAUNTLET_PATH" <<'REMOTE'
+set -euo pipefail
+cd "$1"
+mkdir -p "$HOME/.gauntlet"
+./prod.sh pull gauntlet
+./prod.sh up -d --no-deps gauntlet
+REMOTE
+echo "[update-prod] Done."

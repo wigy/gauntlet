@@ -16,9 +16,11 @@ npx vitest run test/game.test.ts -t "opens doors"   # single file / single test
 npm run import:g1           # download + convert all 125 arcade Gauntlet maps (see below)
 npm run import:g1 -- 9 78   # convert only these level numbers and print them as ASCII
 npm run sprites             # re-slice art/sheets/* into public/sprites/*.png
+bin/build-and-publish [VER] # docker build + push dataplug/gauntlet:VER (default: package.json version) and :latest
+bin/update-prod             # ssh to the dataplug server, pull :latest and restart the `gauntlet` container
 ```
 
-Server environment: `LEVELS=builtin|custom|arcade` (default set for new games; arcade = `public/levels/gauntlet1`, falls back to built-in if not imported), `PORT`, `DATA_DIR` (default `~/.gauntlet/`: saved players in `players.json`, each player's levels in `levels/<player id>/`). URL parameter `?level=N` makes games you create start at level N (for testing).
+Server environment: `LEVELS=builtin|custom|arcade` (default set for new games; arcade = `public/levels/gauntlet1`, falls back to built-in if not imported), `PORT`, `DATA_DIR` (default `~/.gauntlet/`: saved players in `players.json`, each player's levels in `levels/<player id>/`). **Deployment**: https://gauntlet.dataplug-oy.com runs as the `gauntlet` service in `~/dataplug/docker-compose-prod.yml` (behind the stack's nginx-proxy + Let's Encrypt), with the server's `~/.gauntlet` mounted at `/data` (`DATA_DIR`). The image never contains the arcade maps: `public/levels/gauntlet1` and `.import-cache` are symlinks into `/data`, so import them on the server with `docker exec gauntlet npx tsx tools/import-vgmaps.ts` and restart the container. URL parameter `?level=N` makes games you create start at level N (for testing).
 
 ## Architecture
 
