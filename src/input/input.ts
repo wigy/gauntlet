@@ -14,14 +14,13 @@ interface KeyScheme {
 
 // KeyboardEvent.code values, so the layout (QWERTY/AZERTY/...) doesn't matter.
 const KEY_SCHEMES: KeyScheme[] = [
-  { id: 'kb1', label: 'Keyboard 1', up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD', fire: 'KeyF', magic: 'KeyG', hint: 'WASD move, F fire, G potion' },
-  { id: 'kb2', label: 'Keyboard 2', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', fire: 'Slash', magic: 'Period', hint: 'Arrows move, / fire, . potion' },
+  { id: 'kb1', label: 'Keyboard', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', fire: 'KeyZ', magic: 'KeyX', hint: 'Arrows move, Z fire, X potion' },
 ];
 
 const DEADZONE = 0.35;
 
 /**
- * Turns keyboard and gamepads into one PlayerInput per controller id ("kb1", "kb2", "pad0".."pad3").
+ * Turns keyboard and gamepads into one PlayerInput per controller id ("kb1", "pad0".."pad3").
  * Every known controller is reported each poll, so the game can see FIRE presses from controllers that haven't joined yet.
  */
 export class InputManager {
