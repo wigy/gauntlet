@@ -18,7 +18,7 @@ npm run import:g1 -- 9 78   # convert only these level numbers and print them as
 npm run sprites             # re-slice art/sheets/* into public/sprites/*.png
 ```
 
-Server environment: `LEVELS=builtin|gauntlet1` (default `gauntlet1`, falls back to built-in if not imported), `PORT`, `DATA_DIR` (default `data/`, gitignored: saved players in `players.json`). URL parameter `?level=N` makes games you create start at level N (for testing).
+Server environment: `LEVELS=builtin|gauntlet1` (default `gauntlet1`, falls back to built-in if not imported), `PORT`, `DATA_DIR` (default `~/.gauntlet/`: saved players in `players.json`). URL parameter `?level=N` makes games you create start at level N (for testing).
 
 ## Architecture
 

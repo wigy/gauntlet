@@ -4,5 +4,3 @@ dist/
 public/levels/gauntlet1/
 .import-cache/
 
-# Saved player profiles from the game server
-data/
