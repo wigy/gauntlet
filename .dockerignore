@@ -5,3 +5,5 @@ dist
 .import-cache
 public/levels/gauntlet1
 *.log
+docs
+README.md
