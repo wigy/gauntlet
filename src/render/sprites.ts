@@ -49,3 +49,23 @@ export class Sprites {
     return canvas;
   }
 }
+
+const silhouettes = new WeakMap<CanvasImageSource, Map<string, HTMLCanvasElement>>();
+
+/** The sprite's shape filled with one colour, for hit flashes. Cached per image and colour. */
+export function silhouette(img: HTMLImageElement, color: string): HTMLCanvasElement {
+  let byColor = silhouettes.get(img);
+  if (!byColor) silhouettes.set(img, (byColor = new Map()));
+  const cached = byColor.get(color);
+  if (cached) return cached;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  ctx.globalCompositeOperation = 'source-in';
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  byColor.set(color, canvas);
+  return canvas;
+}

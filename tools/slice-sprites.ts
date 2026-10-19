@@ -8,14 +8,14 @@
  * Expects heroes, monsters, items (sprites on a flat magenta background, spaced apart) and tiles
  * (a 2x2 grid of square textures) as .png or .jpg in <sheet-dir>. Sprites are found as connected blobs of non-magenta pixels and named
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
- * Everything is downscaled to SIZE px with alpha snapped to 0/255, so it stays crisp when drawn with smoothing off.
+ * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 
-const SIZE = 64;
+const SIZE = 128;
 const OUT = 'public/sprites';
 
 const SHEETS: Record<string, string[]> = {
@@ -46,7 +46,7 @@ function isBackground(png: PNG, i: number): boolean {
   const r = png.data[i];
   const g = png.data[i + 1];
   const b = png.data[i + 2];
-  return r > 150 && b > 150 && g < 110 && Math.abs(r - b) < 90;
+  return r > 190 && b > 190 && g < 100 && Math.abs(r - b) < 60;
 }
 
 /** Blobs of foreground pixels, found on a coarse grid (so nearby fragments like a sword tip join their owner). */
@@ -123,6 +123,8 @@ function resample(png: PNG, box: Box, key: boolean): PNG {
         for (let x = Math.floor(x0 + ox * sx); x < Math.floor(x0 + (ox + 1) * sx); x++) {
           n++;
           if (x < 0 || y < 0 || x >= png.width || y >= png.height) continue;
+          // Padding to a square must not pull in parts of neighbouring sprites.
+          if (key && (x < box.x0 || x >= box.x1 || y < box.y0 || y >= box.y1)) continue;
           const i = (y * png.width + x) * 4;
           if (key && isBackground(png, i)) continue;
           r += png.data[i];
@@ -132,14 +134,35 @@ function resample(png: PNG, box: Box, key: boolean): PNG {
         }
       }
       const o = (oy * SIZE + ox) * 4;
-      const covered = n > 0 && a / n >= 0.5;
+      const cover = n > 0 ? a / n : 0;
       out.data[o] = a ? r / a : 0;
       out.data[o + 1] = a ? g / a : 0;
       out.data[o + 2] = a ? b / a : 0;
-      out.data[o + 3] = covered ? 255 : 0;
+      // Soft edges, with a little contrast so faint halo pixels vanish and the body stays opaque.
+      out.data[o + 3] = Math.round(255 * Math.min(1, Math.max(0, (cover - 0.15) / 0.7)));
     }
   }
+  if (key) despill(out);
   return out;
+}
+
+/** Antialiased JPEG edges blend sprite and magenta; pull that pink cast out of pixels near transparency. */
+function despill(png: PNG): void {
+  const alphaAt = (x: number, y: number) => (x < 0 || y < 0 || x >= SIZE || y >= SIZE ? 0 : png.data[(y * SIZE + x) * 4 + 3]);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const o = (y * SIZE + x) * 4;
+      if (png.data[o + 3] === 0) continue;
+      let edge = png.data[o + 3] < 255;
+      for (let d = 1; d <= 2 && !edge; d++) edge = !alphaAt(x - d, y) || !alphaAt(x + d, y) || !alphaAt(x, y - d) || !alphaAt(x, y + d);
+      if (!edge) continue;
+      const [r, g, b] = [png.data[o], png.data[o + 1], png.data[o + 2]];
+      const spill = Math.min(r, b) - g;
+      if (spill <= 0) continue;
+      png.data[o] = r - spill * 0.8;
+      png.data[o + 2] = b - spill * 0.8;
+    }
+  }
 }
 
 function findSheet(dir: string, name: string): string | undefined {

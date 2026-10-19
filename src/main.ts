@@ -41,6 +41,7 @@ async function main(): Promise<void> {
     acc = Math.min(acc + (nowMs - last) / 1000, 0.25);
     last = nowMs;
     while (acc >= TICK) {
+      renderer.snapshot(game);
       game.step(input.poll());
       acc -= TICK;
     }
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
       }
     }
     game.events.length = 0;
-    renderer.draw(game, now);
+    renderer.draw(game, now, acc / TICK);
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

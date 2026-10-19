@@ -39,8 +39,9 @@ URL parameters: `?levels=builtin|gauntlet1` (default `gauntlet1`, falls back to 
 ## Graphics
 
 - `art/sheets/` holds the AI-generated source sheets (made with the Gemini image tool: sprites on a flat magenta background, plus a 2x2 tile grid). The tool saves JPEG data even when asked for `.png`, so the slicer sniffs the format.
-- `tools/slice-sprites.ts` finds each sprite as a blob of non-magenta pixels, names them in reading order from its `SHEETS`/`TILES` tables, and writes 64x64 transparent PNGs to `public/sprites/` (committed). If you regenerate a sheet, keep the same sprite count and order, or update those tables.
+- `tools/slice-sprites.ts` finds each sprite as a blob of non-magenta pixels, names them in reading order from its `SHEETS`/`TILES` tables, and writes 128x128 soft-edged transparent PNGs to `public/sprites/` (committed), clipping each crop to the sprite's own blob and removing magenta fringe. If you regenerate a sheet, keep the same sprite count and order, or update those tables.
 - `src/render/sprites.ts` loads them asynchronously. The renderer draws a sprite if it has loaded and otherwise falls back to its canvas-shape drawing, so a missing sprite never breaks the game. Wall colour per level is a cached hue-rotated copy of one of the two wall textures (`WALL_VARIANTS`). Sprites face down only; facing left is a horizontal mirror.
+- Rendering is smooth-scaled (no pixelated mode). `main.ts` calls `renderer.snapshot(game)` before each tick and passes the tick fraction to `draw()`, which interpolates heroes, monsters, shots and the camera. Cosmetic effects (particles, hit flashes, score pop-ups, death bursts) come from diffing game state between frames in `Renderer.trackChanges`, so `src/core` stays free of render events. A low-res light map (`drawLighting`) is multiplied over the scene; `src/render/fx.ts` holds the particles and cached glow/shadow textures. Fonts (Cinzel, Inter) come from Google Fonts with system fallbacks.
 
 ## Not implemented yet
 
