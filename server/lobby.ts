@@ -2,8 +2,9 @@ import { HERO_ORDER } from '../src/core/defs';
 import type { HeroClass } from '../src/core/defs';
 import { Game, MAX_PLAYERS, TICK } from '../src/core/game';
 import type { GameEvent, PlayerInput } from '../src/core/game';
-import type { ClientMessage, ItemRow, LobbyGame, RoomInfo, ServerMessage, Snapshot } from '../src/net/protocol';
+import type { ClientMessage, ItemRow, LevelSetId, LobbyGame, RoomInfo, ServerMessage, Snapshot } from '../src/net/protocol';
 import { cleanName } from '../src/net/protocol';
+import type { LevelLibrary } from './levels';
 import type { PlayerStore } from './store';
 
 /** Snapshots go out every this many ticks (60 / 2 = 30 per second). */
@@ -42,6 +43,9 @@ interface Room {
   state: 'waiting' | 'playing' | 'over';
   members: Client[];
   game: Game | null;
+  set: LevelSetId;
+  /** The set's level texts when the room was opened. */
+  levels: string[];
   startLevel: number;
   overAt: number;
   events: GameEvent[];
@@ -70,7 +74,7 @@ export class Lobby {
   private ticks = 0;
 
   constructor(
-    private readonly levels: readonly string[],
+    private readonly levels: LevelLibrary,
     private readonly store: PlayerStore,
     private readonly clock: () => number = () => performance.now() / 1000,
   ) {
@@ -98,7 +102,7 @@ export class Lobby {
         client.name = saved?.name ?? null;
         if (saved) this.store.touch(client.playerId);
         client.conn.send({ t: 'welcome', id: client.playerId, name: client.name });
-        if (client.name) client.conn.send({ t: 'lobby', games: this.lobbyGames() });
+        if (client.name) client.conn.send(this.lobbyMessage());
         return;
       }
       case 'setName': {
@@ -110,21 +114,29 @@ export class Lobby {
         const p = client.room?.game?.players.find((pl) => pl?.controller === client.id);
         if (p) p.name = name;
         client.conn.send({ t: 'welcome', id: client.playerId, name });
-        client.conn.send({ t: 'lobby', games: this.lobbyGames() });
+        client.conn.send(this.lobbyMessage());
         if (client.room) this.roomChanged(client.room);
         return;
       }
       case 'create': {
         if (!client.name) return;
+        let set = this.levels.isSet(msg.set) ? msg.set : this.levels.defaultSet;
+        let levels = this.levels.texts(set);
+        if (!levels.length) {
+          if (msg.set) return client.conn.send({ t: 'error', message: `There are no ${this.levels.label(set).toLowerCase()} levels yet.` });
+          set = 'builtin';
+          levels = this.levels.texts(set);
+        }
         this.leaveRoom(client);
-        const room: Room = {
-          id: this.roomId(), name: `${client.name}'s game`, state: 'waiting', members: [], game: null, startLevel: 1, overAt: 0, events: [],
-          tiles: new Uint8Array(0), levelSeen: -1, itemsCount: -1, itemsVersion: 0, ids: new WeakMap(), nextId: 1,
-        };
         const level = Number(msg.level);
-        if (Number.isInteger(level) && level >= 1) room.startLevel = level;
+        const room: Room = {
+          id: this.roomId(), name: `${client.name}'s game`, state: 'waiting', members: [], game: null, set, levels,
+          startLevel: Number.isInteger(level) ? Math.max(1, Math.min(levels.length, level)) : 1,
+          overAt: 0, events: [], tiles: new Uint8Array(0), levelSeen: -1, itemsCount: -1, itemsVersion: 0, ids: new WeakMap(), nextId: 1,
+        };
         this.rooms.set(room.id, room);
         this.enterRoom(client, room);
+        if (msg.start === true) this.startRoom(room);
         return;
       }
       case 'join': {
@@ -138,17 +150,7 @@ export class Lobby {
         return;
       }
       case 'start': {
-        const room = client.room;
-        if (!room || room.state !== 'waiting') return;
-        const game = new Game(this.levels, Math.floor(Math.random() * 1e9), room.startLevel, { online: true });
-        game.viewW = VIEW_W;
-        game.viewH = VIEW_H;
-        for (const m of room.members) game.addPlayer(m.id, m.name ?? '?', m.hero);
-        game.start();
-        room.game = game;
-        room.state = 'playing';
-        this.roomChanged(room);
-        this.lobbyChanged();
+        if (client.room?.state === 'waiting') this.startRoom(client.room);
         return;
       }
       case 'pickHero': {
@@ -163,7 +165,35 @@ export class Lobby {
       case 'leave':
         this.leaveRoom(client);
         client.conn.send({ t: 'room', room: null });
-        client.conn.send({ t: 'lobby', games: this.lobbyGames() });
+        client.conn.send(this.lobbyMessage());
+        return;
+      case 'levelList':
+        if (client.name) client.conn.send({ t: 'levelList', sets: this.levels.sets() });
+        return;
+      case 'levelGet': {
+        if (!client.name || !this.levels.isSet(msg.set)) return;
+        const text = this.levels.get(msg.set, String(msg.id));
+        if (text === null) return client.conn.send({ t: 'error', message: 'That level no longer exists.' });
+        client.conn.send({ t: 'levelText', set: msg.set, id: String(msg.id), text });
+        return;
+      }
+      case 'levelSave': {
+        if (!client.name) return;
+        const result = this.levels.save(typeof msg.id === 'string' ? msg.id : null, msg.text);
+        if ('error' in result) return client.conn.send({ t: 'error', message: result.error });
+        client.conn.send({ t: 'levelSaved', id: result.id });
+        this.levelsChanged();
+        return;
+      }
+      case 'levelDelete':
+        if (!client.name) return;
+        this.levels.remove(String(msg.id));
+        this.levelsChanged();
+        return;
+      case 'levelMove':
+        if (!client.name) return;
+        this.levels.move(String(msg.id), Number(msg.delta));
+        this.levelsChanged();
         return;
       case 'input': {
         const axis = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
@@ -206,6 +236,25 @@ export class Lobby {
   }
 
   // ---------------------------------------------------------------- rooms
+
+  private startRoom(room: Room): void {
+    const game = new Game(room.levels, Math.floor(Math.random() * 1e9), room.startLevel, { online: true });
+    game.viewW = VIEW_W;
+    game.viewH = VIEW_H;
+    for (const m of room.members) game.addPlayer(m.id, m.name ?? '?', m.hero);
+    game.start();
+    room.game = game;
+    room.state = 'playing';
+    this.roomChanged(room);
+    this.lobbyChanged();
+  }
+
+  /** Custom levels changed: refresh everyone's level lists and the lobby's set counts. */
+  private levelsChanged(): void {
+    const sets = this.levels.sets();
+    for (const c of this.clients) if (c.name) c.conn.send({ t: 'levelList', sets });
+    this.lobbyChanged();
+  }
 
   private enterRoom(client: Client, room: Room): void {
     client.hero = HERO_ORDER.find((h) => !room.members.some((m) => m.hero === h)) ?? 'warrior';
@@ -252,10 +301,14 @@ export class Lobby {
   }
 
   private lobbyChanged(): void {
-    const games = this.lobbyGames();
+    const msg = this.lobbyMessage();
     for (const c of this.clients) {
-      if (c.name && (!c.room || c.room.state === 'waiting')) c.conn.send({ t: 'lobby', games });
+      if (c.name && (!c.room || c.room.state === 'waiting')) c.conn.send(msg);
     }
+  }
+
+  private lobbyMessage(): ServerMessage {
+    return { t: 'lobby', games: this.lobbyGames(), sets: this.levels.summary(), defaultSet: this.levels.defaultSet };
   }
 
   lobbyGames(): LobbyGame[] {
@@ -267,6 +320,7 @@ export class Lobby {
         name: room.name,
         state: room.state,
         players: this.playerInfo(room),
+        set: this.levels.label(room.set),
         level: room.game?.levelNumber ?? 0,
         open: room.members.length < MAX_PLAYERS,
       });

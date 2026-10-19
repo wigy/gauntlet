@@ -64,6 +64,38 @@ export function levelTitle(n: number, name: string): string {
   return t === String(n) || t === NUMBER_WORDS[n] ? '' : name;
 }
 
+/** Largest level the editor and server accept, in tiles. */
+export const MAX_LEVEL_SIZE = 100;
+
+/** Every character of the grid legend, for editors. */
+export const LEGEND = { TILE_CHARS, ITEM_CHARS, GENERATOR_CHARS, MONSTER_CHARS } as const;
+
+/**
+ * The text form of a level (inverse of parseLevel). Ranks are per level in the text format, so mixed ranks
+ * collapse to the highest one.
+ */
+export function levelToText(level: LevelData): string {
+  const { width, height } = level;
+  const grid: string[][] = [];
+  for (let y = 0; y < height; y++) {
+    const row: string[] = [];
+    for (let x = 0; x < width; x++) {
+      const t = level.tiles[y * width + x];
+      row.push(t === Tile.Wall ? '#' : t === Tile.Door ? 'D' : t === Tile.Exit ? 'E' : '.');
+    }
+    grid.push(row);
+  }
+  const charOf = <K extends string>(map: Record<string, K>, kind: K) => Object.keys(map).find((c) => map[c] === kind)!;
+  for (const s of level.starts) grid[s.y][s.x] = 'S';
+  for (const it of level.items) grid[it.y][it.x] = charOf(ITEM_CHARS, it.kind);
+  for (const g of level.generators) grid[g.y][g.x] = charOf(GENERATOR_CHARS, g.kind);
+  for (const m of level.monsters) grid[m.y][m.x] = charOf(MONSTER_CHARS, m.kind);
+  const ranks = [...level.generators, ...level.monsters].filter((m) => m.kind !== 'death').map((m) => m.rank);
+  const rank = ranks.length ? Math.max(...ranks) : 3;
+  const wrap = level.wrapX && level.wrapY ? 'both' : level.wrapX ? 'x' : level.wrapY ? 'y' : 'none';
+  return `name: ${level.name}\nwrap: ${wrap}\nrank: ${rank}\n---\n${grid.map((r) => r.join('')).join('\n')}\n`;
+}
+
 export function parseLevel(text: string): LevelData {
   const lines = text.replace(/\r/g, '').split('\n');
   const sep = lines.indexOf('---');

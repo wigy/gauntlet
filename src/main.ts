@@ -2,6 +2,7 @@ import { Audio } from './audio/audio';
 import { Game } from './core/game';
 import type { GameEvent } from './core/game';
 import { InputManager } from './input/input';
+import { Editor } from './editor/editor';
 import { BUILTIN_LEVELS } from './levels/builtin';
 import { Connection } from './net/connection';
 import { Mirror } from './net/mirror';
@@ -45,6 +46,8 @@ function main(): void {
   let name: string | null = null;
   let room: RoomInfo | null = null;
   let paused = false;
+  /** In the level editor (it's shown whenever we're not in a game, e.g. it comes back after a play test). */
+  let editing = false;
   let lastSnapAt = 0;
   let snapGap = 1 / 30;
   let sentInput = '';
@@ -55,7 +58,11 @@ function main(): void {
     document.getElementById('ui')!,
     {
       setName: (n) => conn.send({ t: 'setName', name: n }),
-      create: () => conn.send({ t: 'create', level: startLevel }),
+      create: (set) => conn.send({ t: 'create', set, level: startLevel }),
+      openEditor: () => {
+        editing = true;
+        updateScreens();
+      },
       join: (id) => conn.send({ t: 'join', game: id }),
       start: () => conn.send({ t: 'start' }),
       pickHero: (hero) => conn.send({ t: 'pickHero', hero }),
@@ -67,6 +74,19 @@ function main(): void {
     },
     CONTROLS,
   );
+
+  const editor = new Editor(document.getElementById('editor')!, {
+    list: () => conn.send({ t: 'levelList' }),
+    load: (set, id) => conn.send({ t: 'levelGet', set, id }),
+    save: (id, text) => conn.send({ t: 'levelSave', id, text }),
+    remove: (id) => conn.send({ t: 'levelDelete', id }),
+    move: (id, delta) => conn.send({ t: 'levelMove', id, delta }),
+    playTest: (level) => conn.send({ t: 'create', set: 'custom', level, start: true }),
+    close: () => {
+      editing = false;
+      updateScreens();
+    },
+  });
 
   const resize = () => {
     renderer.resize(mirror);
@@ -82,11 +102,15 @@ function main(): void {
       resize();
     }
     input.enabled = playing && !paused;
+    if (playing) editor.hide();
     if (playing) {
       if (paused) menu.pause();
       else menu.hide();
     } else if (!name) {
       if (menu.current !== 'name') menu.askName(null);
+    } else if (editing) {
+      menu.hide();
+      if (!editor.isOpen) editor.open();
     } else if (room) {
       menu.showRoom();
     } else {
@@ -117,6 +141,7 @@ function main(): void {
     renderer.menu = true;
     resize();
     input.enabled = false;
+    editor.hide();
     menu.connecting(status === 'lost');
   };
 
@@ -131,7 +156,7 @@ function main(): void {
         else if (menu.current === 'name' || menu.current === 'connecting') updateScreens();
         break;
       case 'lobby':
-        menu.setGames(msg.games);
+        menu.setGames(msg.games, msg.sets, msg.defaultSet);
         break;
       case 'room':
         room = msg.room;
@@ -155,7 +180,17 @@ function main(): void {
         break;
       }
       case 'error':
-        menu.toast(msg.message);
+        if (editor.isOpen) editor.error(msg.message);
+        else menu.toast(msg.message);
+        break;
+      case 'levelList':
+        editor.setSets(msg.sets);
+        break;
+      case 'levelText':
+        editor.levelText(msg.set, msg.id, msg.text);
+        break;
+      case 'levelSaved':
+        editor.saved(msg.id);
         break;
     }
   };
@@ -182,7 +217,7 @@ function main(): void {
         conn.send({ t: 'input', ...i });
       }
       renderer.draw(mirror, now, (now - lastSnapAt) / snapGap);
-    } else {
+    } else if (!editor.isOpen) {
       sentInput = '';
       // Drift slowly around the backdrop level.
       const s = backdrop.level.starts[0] ?? { x: 0, y: 0 };

@@ -179,6 +179,45 @@ input:focus {
   width: 100%;
 }
 
+.new-game {
+  display: flex;
+  gap: 8px;
+}
+
+.new-game .btn {
+  flex: 1;
+}
+
+.set-select {
+  padding: 0 10px;
+  font: 600 14px 'Inter', system-ui, sans-serif;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+}
+
+.set-select option {
+  background: #1c1728;
+}
+
+.editor-link {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (max-width: 520px) {
+  .new-game {
+    flex-direction: column;
+  }
+
+  .set-select {
+    padding: 10px;
+  }
+}
+
 .link {
   padding: 0;
   font: inherit;

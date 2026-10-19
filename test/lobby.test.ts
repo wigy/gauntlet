@@ -3,6 +3,7 @@ import { Game, TICK } from '../src/core/game';
 import type { ServerMessage, Snapshot } from '../src/net/protocol';
 import { Lobby } from '../server/lobby';
 import type { Client } from '../server/lobby';
+import { LevelLibrary } from '../server/levels';
 import { PlayerStore } from '../server/store';
 
 const LEVEL = `name: Hall
@@ -17,7 +18,8 @@ const LEVEL = `name: Hall
 function setup() {
   let time = 0;
   const store = new PlayerStore(null);
-  const lobby = new Lobby([LEVEL, LEVEL], store, () => time);
+  const levels = new LevelLibrary({ customDir: null, builtin: [LEVEL, LEVEL] });
+  const lobby = new Lobby(levels, store, () => time);
   const join = (name: string | null, id: string | null = null) => {
     const inbox: ServerMessage[] = [];
     const client = lobby.connect({ send: (m) => inbox.push(m) });
@@ -31,7 +33,7 @@ function setup() {
       lobby.tick(time);
     }
   };
-  return { lobby, store, join, ticks };
+  return { lobby, store, levels, join, ticks };
 }
 
 const gameOf = (c: Client): Game => (c.room as unknown as { game: Game }).game;

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { WS_PATH } from '../src/net/protocol';
 import type { ClientMessage } from '../src/net/protocol';
-import { loadLevels } from './levels';
+import { LevelLibrary } from './levels';
 import { Lobby } from './lobby';
 import { PlayerStore } from './store';
 
@@ -17,8 +17,9 @@ const DEFAULT_DATA_DIR = join(homedir(), '.gauntlet');
 
 export function attachGameServer(server: Server, dataDir = process.env.DATA_DIR || DEFAULT_DATA_DIR): { lobby: Lobby; close(): void } {
   const store = new PlayerStore(join(dataDir, 'players.json'));
-  const lobby = new Lobby(loadLevels(), store);
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+  const levels = new LevelLibrary({ customDir: join(dataDir, 'levels'), arcadeDir: 'public/levels/gauntlet1', preferred: process.env.LEVELS });
+  const lobby = new Lobby(levels, store);
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
     if (new URL(req.url ?? '/', 'http://localhost').pathname !== WS_PATH) return;

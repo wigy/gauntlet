@@ -19,11 +19,16 @@ const WALL_VARIANTS: [SpriteName, number][] = [['wall-orange', 0], ['wall-teal',
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private walls = new Map<number, CanvasImageSource>();
+  /** Called whenever another image finishes loading (the editor redraws then; the game redraws every frame anyway). */
+  onload: (() => void) | null = null;
 
   constructor(base = 'sprites/') {
     for (const name of SPRITE_NAMES) {
       const img = new Image();
-      img.onload = () => this.images.set(name, img);
+      img.onload = () => {
+        this.images.set(name, img);
+        this.onload?.();
+      };
       img.src = `${base}${name}.png`;
     }
   }

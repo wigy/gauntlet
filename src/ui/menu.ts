@@ -1,12 +1,13 @@
 import { HERO_ORDER, HEROES } from '../core/defs';
 import type { HeroClass } from '../core/defs';
-import type { LobbyGame, PlayerInfo, RoomInfo } from '../net/protocol';
+import type { LevelSetId, LevelSetSummary, LobbyGame, PlayerInfo, RoomInfo } from '../net/protocol';
 import { MAX_NAME_LENGTH } from '../net/protocol';
 import './menu.css';
 
 export interface MenuActions {
   setName(name: string): void;
-  create(): void;
+  create(set: LevelSetId): void;
+  openEditor(): void;
   join(gameId: string): void;
   start(): void;
   pickHero(hero: HeroClass): void;
@@ -25,6 +26,8 @@ export class Menu {
   private screen: Screen = 'none';
   private name: string | null = null;
   private games: LobbyGame[] = [];
+  private sets: LevelSetSummary[] = [];
+  private set: LevelSetId | null = null;
   private room: RoomInfo | null = null;
   private toastTimer = 0;
   private panel: HTMLElement;
@@ -37,6 +40,10 @@ export class Menu {
     root.addEventListener('click', (e) => {
       const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
       if (el && !(el as HTMLButtonElement).disabled) this.act(el.dataset.action!, el.dataset.id);
+    });
+    root.addEventListener('change', (e) => {
+      const el = e.target as HTMLSelectElement;
+      if (el.classList.contains('set-select')) this.set = el.value as LevelSetId;
     });
     root.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -81,8 +88,10 @@ export class Menu {
     this.name = name;
   }
 
-  setGames(games: LobbyGame[]): void {
+  setGames(games: LobbyGame[], sets: LevelSetSummary[], defaultSet: LevelSetId): void {
     this.games = games;
+    this.sets = sets;
+    if (!this.set || !sets.some((s) => s.id === this.set && s.count)) this.set = defaultSet;
     if (this.screen === 'lobby') this.lobby();
   }
 
@@ -100,7 +109,7 @@ export class Menu {
           <div class="game-name">${esc(g.name)}</div>
           <div class="game-players">${g.players.map((p) => this.playerChip(p)).join('')}</div>
         </div>
-        <span class="badge ${g.state}">${g.state === 'waiting' ? 'Waiting' : `Level ${g.level}`}</span>
+        <span class="badge ${g.state}">${esc(g.set)} · ${g.state === 'waiting' ? 'Waiting' : `Level ${g.level}`}</span>
         <button class="btn small" data-action="join" data-id="${esc(g.id)}" ${g.open ? '' : 'disabled'}>
           ${g.open ? (g.state === 'waiting' ? 'Join' : 'Jump in') : 'Full'}
         </button>
@@ -110,7 +119,13 @@ export class Menu {
         ${this.title()}
         <div class="who">Playing as <strong>${esc(this.name ?? '')}</strong>
           <button class="link" data-action="change-name">change</button></div>
-        <button class="btn primary wide" data-action="create">Start a new game</button>
+        <div class="new-game">
+          <select class="set-select" aria-label="Levels to play">
+            ${this.sets.map((s) => `<option value="${s.id}" ${s.id === this.set ? 'selected' : ''} ${s.count ? '' : 'disabled'}>${esc(s.label)} levels (${s.count})</option>`).join('')}
+          </select>
+          <button class="btn primary" data-action="create">Start a new game</button>
+        </div>
+        <button class="btn ghost wide editor-link" data-action="editor">Level editor</button>
         <h2>Open games</h2>
         ${rows ? `<ul class="games">${rows}</ul>` : '<p class="empty">No games right now. Start one and others can join you.</p>'}
         <p class="hint">${esc(this.controls)}</p>
@@ -187,7 +202,10 @@ export class Menu {
   private act(action: string, id: string | undefined): void {
     switch (action) {
       case 'create':
-        return this.actions.create();
+        if (this.set) this.actions.create(this.set);
+        return;
+      case 'editor':
+        return this.actions.openEditor();
       case 'join':
         if (id) this.actions.join(id);
         return;

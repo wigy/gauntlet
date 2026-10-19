@@ -14,15 +14,40 @@ export type ClientMessage =
   /** First message. `id` is the saved player id from a previous visit, if any. */
   | { t: 'hello'; id: string | null }
   | { t: 'setName'; name: string }
-  /** Open a new game and wait for others. `level` is an optional start level (for testing). */
-  | { t: 'create'; level?: number }
+  /**
+   * Open a new game from a level set (default: the server's), starting at `level` (1-based, default 1).
+   * `start` skips the waiting room (the editor's play test).
+   */
+  | { t: 'create'; set?: LevelSetId; level?: number; start?: boolean }
   | { t: 'join'; game: string }
   /** Start a waiting game. Any player in it may do this. */
   | { t: 'start' }
   /** Switch to another hero while the game is waiting, if nobody else has it. */
   | { t: 'pickHero'; hero: HeroClass }
   | { t: 'leave' }
-  | { t: 'input'; dx: number; dy: number; fire: boolean; magic: boolean };
+  | { t: 'input'; dx: number; dy: number; fire: boolean; magic: boolean }
+  // Level editor. Built-in and arcade levels are read-only; custom levels can be saved, deleted and reordered.
+  | { t: 'levelList' }
+  | { t: 'levelGet'; set: LevelSetId; id: string }
+  /** `id` null creates a new custom level. */
+  | { t: 'levelSave'; id: string | null; text: string }
+  | { t: 'levelDelete'; id: string }
+  | { t: 'levelMove'; id: string; delta: -1 | 1 };
+
+export type LevelSetId = 'arcade' | 'builtin' | 'custom';
+
+export interface LevelSetSummary {
+  id: LevelSetId;
+  label: string;
+  count: number;
+}
+
+export interface LevelSetInfo {
+  id: LevelSetId;
+  label: string;
+  /** Built-in and arcade ids are indexes; custom ids are stable file ids. */
+  levels: { id: string; name: string }[];
+}
 
 export interface PlayerInfo {
   name: string;
@@ -34,6 +59,8 @@ export interface LobbyGame {
   name: string;
   state: 'waiting' | 'playing';
   players: PlayerInfo[];
+  /** Level set label, e.g. "Arcade". */
+  set: string;
   level: number;
   /** False when the game already has four players. */
   open: boolean;
@@ -88,11 +115,14 @@ export interface Snapshot {
 
 export type ServerMessage =
   | { t: 'welcome'; id: string; name: string | null }
-  | { t: 'lobby'; games: LobbyGame[] }
+  | { t: 'lobby'; games: LobbyGame[]; sets: LevelSetSummary[]; defaultSet: LevelSetId }
   | { t: 'room'; room: RoomInfo | null }
   | { t: 'level'; level: LevelInfo }
   | Snapshot
-  | { t: 'error'; message: string };
+  | { t: 'error'; message: string }
+  | { t: 'levelList'; sets: LevelSetInfo[] }
+  | { t: 'levelText'; set: LevelSetId; id: string; text: string }
+  | { t: 'levelSaved'; id: string };
 
 export function cleanName(name: unknown): string {
   return String(name ?? '')
