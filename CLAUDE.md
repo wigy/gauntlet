@@ -14,6 +14,7 @@ npm test                    # vitest run
 npx vitest run test/game.test.ts -t "opens doors"   # single file / single test
 npm run import:g1           # download + convert all 125 arcade Gauntlet maps (see below)
 npm run import:g1 -- 9 78   # convert only these level numbers and print them as ASCII
+npm run sprites             # re-slice art/sheets/* into public/sprites/*.png
 ```
 
 URL parameters: `?levels=builtin|gauntlet1` (default `gauntlet1`, falls back to built-in if not imported), `?level=N` start level, `?seed=N` fixes the random seed.
@@ -35,6 +36,12 @@ URL parameters: `?levels=builtin|gauntlet1` (default `gauntlet1`, falls back to 
 - **Arcade maps**: `tools/import-vgmaps.ts` downloads the arcade Gauntlet I rips from VGMaps and classifies 16 px cells into wall/floor/exit by colour clustering. The rips are 33x33 cells; the 33rd row/column duplicates the first, which the importer uses to detect wrapping. The rips contain **only walls and exits**, so `populate()` places the start, generators, monsters and items deterministically from the seed and level number. Output (`public/levels/gauntlet1/`) and the download cache (`.import-cache/`) are gitignored on purpose: the layouts are Atari's, so don't commit them.
 - Gauntlet II maps also exist on VGMaps (`GauntletII-Levels-*.png`), but as 3x3 composite sheets with varied textures and special tiles. The colour-clustering importer doesn't work on them, so they aren't imported yet.
 
+## Graphics
+
+- `art/sheets/` holds the AI-generated source sheets (made with the Gemini image tool: sprites on a flat magenta background, plus a 2x2 tile grid). The tool saves JPEG data even when asked for `.png`, so the slicer sniffs the format.
+- `tools/slice-sprites.ts` finds each sprite as a blob of non-magenta pixels, names them in reading order from its `SHEETS`/`TILES` tables, and writes 64x64 transparent PNGs to `public/sprites/` (committed). If you regenerate a sheet, keep the same sprite count and order, or update those tables.
+- `src/render/sprites.ts` loads them asynchronously. The renderer draws a sprite if it has loaded and otherwise falls back to its canvas-shape drawing, so a missing sprite never breaks the game. Wall colour per level is a cached hue-rotated copy of one of the two wall textures (`WALL_VARIANTS`). Sprites face down only; facing left is a horizontal mirror.
+
 ## Not implemented yet
 
-Online multiplayer, Gauntlet II mechanics (stun tiles, force fields, the dragon, "It"), invisibility and other special potions, friendly-fire stun, sprite art (everything is drawn with canvas primitives in `src/render/renderer.ts`).
+Online multiplayer, Gauntlet II mechanics (stun tiles, force fields, the dragon, "It"), invisibility and other special potions, friendly-fire stun, directional and animated sprites (heroes and monsters have a single front-facing frame).

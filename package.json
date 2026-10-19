@@ -10,11 +10,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "import:g1": "tsx tools/import-vgmaps.ts"
+    "import:g1": "tsx tools/import-vgmaps.ts",
+    "sprites": "tsx tools/slice-sprites.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/pngjs": "^6.0.5",
+    "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

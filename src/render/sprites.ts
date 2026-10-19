@@ -1,0 +1,51 @@
+/**
+ * Optional sprite images from public/sprites/<name>.png (see tools/slice-sprites.ts). Loading is fire-and-forget:
+ * `get()` returns undefined until an image has loaded (or if it's missing), and the renderer falls back to shapes.
+ */
+export const SPRITE_NAMES = [
+  'warrior', 'valkyrie', 'wizard', 'elf',
+  'ghost', 'grunt', 'demon', 'lobber', 'sorcerer', 'death',
+  'food', 'cider', 'potion', 'key', 'treasure-gold', 'generator',
+  'wall-orange', 'wall-teal', 'floor', 'door',
+] as const;
+
+export type SpriteName = (typeof SPRITE_NAMES)[number];
+
+/** Wall looks per level: [texture, hue rotation in degrees]. */
+const WALL_VARIANTS: [SpriteName, number][] = [['wall-orange', 0], ['wall-teal', 0], ['wall-orange', 230], ['wall-orange', -25], ['wall-teal', 90], ['wall-orange', 60]];
+
+export class Sprites {
+  private images = new Map<SpriteName, HTMLImageElement>();
+  private walls = new Map<number, CanvasImageSource>();
+
+  constructor(base = 'sprites/') {
+    for (const name of SPRITE_NAMES) {
+      const img = new Image();
+      img.onload = () => this.images.set(name, img);
+      img.src = `${base}${name}.png`;
+    }
+  }
+
+  get(name: SpriteName): HTMLImageElement | undefined {
+    return this.images.get(name);
+  }
+
+  /** Wall texture for a level, recoloured with a cached hue-rotated copy so levels don't all look alike. */
+  wall(levelNumber: number): CanvasImageSource | undefined {
+    const v = (levelNumber - 1) % WALL_VARIANTS.length;
+    const cached = this.walls.get(v);
+    if (cached) return cached;
+    const [name, hue] = WALL_VARIANTS[v];
+    const img = this.get(name);
+    if (!img) return undefined;
+    if (hue === 0) return img;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.filter = `hue-rotate(${hue}deg)`;
+    ctx.drawImage(img, 0, 0);
+    this.walls.set(v, canvas);
+    return canvas;
+  }
+}

@@ -2,17 +2,24 @@ import { MONSTERS } from '../core/defs';
 import { Tile, tileAt } from '../core/level';
 import type { Game, Monster, Player } from '../core/game';
 import { HERO_ORDER, HEROES } from '../core/defs';
+import type { ItemKind } from '../core/defs';
+import { Sprites } from './sprites';
+import type { SpriteName } from './sprites';
 
 const WALL_COLORS = ['#c0602a', '#3a8a8a', '#7a4ac0', '#a03030', '#4a8a3a', '#b08a2a', '#4a5ab0'];
 const FLOOR_COLORS = ['#26243a', '#2a2018', '#1c2a2a', '#2a1c26', '#1a2230'];
 const HUD_W = 230;
+const ITEM_SPRITES: Record<ItemKind, SpriteName> = { food: 'food', cider: 'cider', potion: 'potion', key: 'key', treasure: 'treasure-gold' };
 
 export interface Hint {
   join: string;
   label: string;
 }
 
-/** Draws the game onto a canvas. Owns the mapping from tile coordinates to screen pixels; never mutates game logic. */
+/**
+ * Draws the game onto a canvas. Owns the mapping from tile coordinates to screen pixels; never mutates game logic.
+ * Uses sprite images when they've loaded and falls back to canvas shapes otherwise.
+ */
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private tile = 32;
@@ -20,6 +27,7 @@ export class Renderer {
   private message = '';
   private messageUntil = 0;
   private flashUntil = 0;
+  private sprites = new Sprites();
 
   constructor(private canvas: HTMLCanvasElement, private hints: readonly Hint[]) {
     this.ctx = canvas.getContext('2d')!;
@@ -34,6 +42,7 @@ export class Renderer {
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${h}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.imageSmoothingEnabled = false;
     this.playW = Math.max(200, w - HUD_W);
     this.tile = Math.max(16, Math.floor(Math.min(this.playW / 18, h / 13)));
     game.viewW = this.playW / this.tile;
@@ -84,6 +93,9 @@ export class Renderer {
     const lvl = game.level;
     const wall = WALL_COLORS[(game.levelNumber - 1) % WALL_COLORS.length];
     const floor = FLOOR_COLORS[(game.levelNumber - 1) % FLOOR_COLORS.length];
+    const wallTex = this.sprites.wall(game.levelNumber);
+    const floorTex = this.sprites.get('floor');
+    const doorTex = this.sprites.get('door');
     const halfW = this.playW / tile / 2 + 1;
     const halfH = h / tile / 2 + 1;
     const x0 = Math.floor(game.camera.x - halfW);
@@ -101,23 +113,36 @@ export class Renderer {
         if (outside) continue;
         const t = tileAt(lvl, tx, ty);
         if (t === Tile.Wall) {
-          ctx.fillStyle = wall;
-          ctx.fillRect(px, py, tile, tile);
-          ctx.fillStyle = 'rgba(255,255,255,0.18)';
-          ctx.fillRect(px, py, tile, tile * 0.15);
-          ctx.fillRect(px, py, tile * 0.15, tile);
+          if (wallTex) {
+            ctx.drawImage(wallTex, px, py, tile, tile);
+          } else {
+            ctx.fillStyle = wall;
+            ctx.fillRect(px, py, tile, tile);
+            ctx.fillStyle = 'rgba(255,255,255,0.18)';
+            ctx.fillRect(px, py, tile, tile * 0.15);
+            ctx.fillRect(px, py, tile * 0.15, tile);
+          }
           ctx.fillStyle = 'rgba(0,0,0,0.35)';
           ctx.fillRect(px, py + tile * 0.85, tile, tile * 0.15);
           ctx.fillRect(px + tile * 0.85, py, tile * 0.15, tile);
           continue;
         }
-        ctx.fillStyle = floor;
-        ctx.fillRect(px, py, tile, tile);
-        if ((tx + ty) % 2 === 0) {
-          ctx.fillStyle = 'rgba(255,255,255,0.025)';
+        if (floorTex) {
+          // Darkened so heroes and monsters stand out.
+          ctx.drawImage(floorTex, px, py, tile, tile);
+          ctx.fillStyle = 'rgba(0,0,0,0.45)';
           ctx.fillRect(px, py, tile, tile);
+        } else {
+          ctx.fillStyle = floor;
+          ctx.fillRect(px, py, tile, tile);
+          if ((tx + ty) % 2 === 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.025)';
+            ctx.fillRect(px, py, tile, tile);
+          }
         }
-        if (t === Tile.Door) {
+        if (t === Tile.Door && doorTex) {
+          ctx.drawImage(doorTex, px, py, tile, tile);
+        } else if (t === Tile.Door) {
           ctx.fillStyle = '#5a3a10';
           ctx.fillRect(px + 1, py + 1, tile - 2, tile - 2);
           ctx.fillStyle = '#e0b030';
@@ -151,6 +176,11 @@ export class Renderer {
       const px = this.sx(game, g.x);
       const py = this.sy(game, g.y, h);
       const s = tile * (0.55 + 0.12 * Math.min(3, Math.ceil(g.hp / 3)));
+      const img = this.sprites.get('generator');
+      if (img) {
+        this.drawSprite(img, px, py, s * 1.15, false);
+        continue;
+      }
       ctx.fillStyle = '#3a2a1a';
       ctx.fillRect(px - s / 2, py - s / 2, s, s);
       ctx.strokeStyle = MONSTERS[g.kind].color;
@@ -192,8 +222,13 @@ export class Renderer {
     }
   }
 
-  private drawItem(kind: string, px: number, py: number): void {
+  private drawItem(kind: ItemKind, px: number, py: number): void {
     const { ctx, tile } = this;
+    const img = this.sprites.get(ITEM_SPRITES[kind]);
+    if (img) {
+      this.drawSprite(img, px, py, tile * 0.85, false);
+      return;
+    }
     const r = tile * 0.3;
     switch (kind) {
       case 'food':
@@ -237,6 +272,12 @@ export class Renderer {
     const r = tile * (0.28 + 0.04 * m.rank);
     ctx.save();
     if (m.kind === 'sorcerer' && m.invisible > 0) ctx.globalAlpha = 0.2;
+    const img = this.sprites.get(m.kind);
+    if (img) {
+      this.drawSprite(img, px, py, tile * (0.8 + 0.1 * m.rank), m.fx < 0);
+      ctx.restore();
+      return;
+    }
     const color = m.def.color;
     switch (m.kind) {
       case 'ghost': {
@@ -303,6 +344,17 @@ export class Renderer {
   private drawHero(p: Player, px: number, py: number): void {
     const { ctx, tile } = this;
     const r = tile * 0.4;
+    const img = this.sprites.get(p.hero);
+    if (img) {
+      // Coloured base ring so players can tell the heroes apart in a crowd.
+      ctx.strokeStyle = p.def.color;
+      ctx.lineWidth = Math.max(2, tile / 14);
+      ctx.beginPath();
+      ctx.ellipse(px, py + r * 0.9, r * 0.9, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      this.drawSprite(img, px, py, tile * 1.15, p.fx < 0);
+      return;
+    }
     this.circle(px, py, r, p.def.color);
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = Math.max(2, tile / 12);
@@ -395,6 +447,20 @@ export class Renderer {
       ctx.fillText(`Score  ${p.score}`, x + 20, py + 40);
       ctx.fillText(`Keys ${p.keys}  Potions ${p.potions}`, x + 20, py + 58);
     }
+  }
+
+  /** Draw an image centred on (px, py), `size` pixels square, optionally mirrored to face left. */
+  private drawSprite(img: CanvasImageSource, px: number, py: number, size: number, flip: boolean): void {
+    const { ctx } = this;
+    if (!flip) {
+      ctx.drawImage(img, Math.round(px - size / 2), Math.round(py - size / 2), size, size);
+      return;
+    }
+    ctx.save();
+    ctx.translate(Math.round(px), Math.round(py));
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, -size / 2, -size / 2, size, size);
+    ctx.restore();
   }
 
   private circle(x: number, y: number, r: number, color: string): void {
