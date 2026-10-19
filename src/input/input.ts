@@ -25,14 +25,34 @@ const DEADZONE = 0.35;
  */
 export class InputManager {
   private down = new Set<string>();
+  private active = true;
 
   constructor(target: Window) {
     target.addEventListener('keydown', (e) => {
+      // Leave keys alone while a menu or text field is in use.
+      if (!this.active || e.target instanceof HTMLInputElement) return;
       if (KEY_SCHEMES.some((s) => [s.up, s.down, s.left, s.right, s.fire, s.magic].includes(e.code))) e.preventDefault();
       this.down.add(e.code);
     });
     target.addEventListener('keyup', (e) => this.down.delete(e.code));
     target.addEventListener('blur', () => this.down.clear());
+  }
+
+  /** Turn game controls off while menus are shown, so arrows and Z/X work normally there. */
+  set enabled(on: boolean) {
+    this.active = on;
+    if (!on) this.down.clear();
+  }
+
+  /** One player's input from every controller at once (online, each browser plays one hero). */
+  combined(): PlayerInput {
+    const all = [...this.poll().values()];
+    return {
+      dx: all.find((i) => i.dx)?.dx ?? 0,
+      dy: all.find((i) => i.dy)?.dy ?? 0,
+      fire: all.some((i) => i.fire),
+      magic: all.some((i) => i.magic),
+    };
   }
 
   get hints(): { label: string; join: string }[] {

@@ -1,52 +1,101 @@
 import { Audio } from './audio/audio';
-import { Game, TICK } from './core/game';
+import { Game } from './core/game';
+import type { GameEvent } from './core/game';
 import { InputManager } from './input/input';
 import { BUILTIN_LEVELS } from './levels/builtin';
+import { Connection } from './net/connection';
+import { Mirror } from './net/mirror';
+import type { RoomInfo, ServerMessage } from './net/protocol';
 import { Renderer } from './render/renderer';
+import { Menu } from './ui/menu';
 
-/** Level sets served from public/levels/<set>/index.json (a JSON array of level file names, in play order). */
-async function loadLevelSet(set: string): Promise<string[] | null> {
+/** localStorage key for the player id the server gave us, so our name is remembered. */
+const ID_KEY = 'gauntlet.playerId';
+const CONTROLS = 'Arrow keys move · Z fire · X potion · gamepads work too · Esc for the menu';
+
+function loadId(): string | null {
   try {
-    const res = await fetch(`levels/${set}/index.json`);
-    if (!res.ok) return null;
-    const files = (await res.json()) as string[];
-    return await Promise.all(files.map(async (f) => (await fetch(`levels/${set}/${f}`)).text()));
+    return localStorage.getItem(ID_KEY);
   } catch {
     return null;
   }
 }
 
-async function main(): Promise<void> {
+function saveId(id: string): void {
+  try {
+    localStorage.setItem(ID_KEY, id);
+  } catch {
+    // Private mode etc.: we just won't be remembered.
+  }
+}
+
+function main(): void {
   const params = new URLSearchParams(location.search);
-  const wanted = params.get('levels') ?? 'gauntlet1';
-  const seed = Number(params.get('seed') ?? Date.now() % 100000);
-  const levels = (wanted !== 'builtin' && (await loadLevelSet(wanted))) || [...BUILTIN_LEVELS];
-  const start = Math.max(1, Number(params.get('level') ?? 1));
+  const startLevel = Number(params.get('level')) || undefined;
 
   const canvas = document.getElementById('screen') as HTMLCanvasElement;
   const input = new InputManager(window);
-  const game = new Game(levels, seed, start);
-  const renderer = new Renderer(canvas, input.hints);
+  const renderer = new Renderer(canvas);
   const audio = new Audio();
+  const conn = new Connection();
+  const mirror = new Mirror();
+  // A level that is never simulated, drawn dimmed behind the lobby screens.
+  const backdrop = new Game([...BUILTIN_LEVELS], 1, 1);
 
-  renderer.resize(game);
-  window.addEventListener('resize', () => renderer.resize(game));
-  window.addEventListener('keydown', () => audio.unlock());
-  window.addEventListener('pointerdown', () => audio.unlock());
-  window.addEventListener('gamepadconnected', () => audio.unlock());
+  let name: string | null = null;
+  let room: RoomInfo | null = null;
+  let paused = false;
+  let lastSnapAt = 0;
+  let snapGap = 1 / 30;
+  let sentInput = '';
 
-  let acc = 0;
-  let last = performance.now();
-  const frame = (nowMs: number) => {
-    acc = Math.min(acc + (nowMs - last) / 1000, 0.25);
-    last = nowMs;
-    while (acc >= TICK) {
-      renderer.snapshot(game);
-      game.step(input.poll());
-      acc -= TICK;
+  const inGame = () => !!room && room.state !== 'waiting';
+
+  const menu = new Menu(
+    document.getElementById('ui')!,
+    {
+      setName: (n) => conn.send({ t: 'setName', name: n }),
+      create: () => conn.send({ t: 'create', level: startLevel }),
+      join: (id) => conn.send({ t: 'join', game: id }),
+      start: () => conn.send({ t: 'start' }),
+      pickHero: (hero) => conn.send({ t: 'pickHero', hero }),
+      leave: () => conn.send({ t: 'leave' }),
+      resume: () => {
+        paused = false;
+        updateScreens();
+      },
+    },
+    CONTROLS,
+  );
+
+  const resize = () => {
+    renderer.resize(mirror);
+    backdrop.viewW = mirror.viewW;
+    backdrop.viewH = mirror.viewH;
+  };
+
+  /** Show whichever screen fits the current state: lobby, waiting room, pause menu or the game itself. */
+  function updateScreens(): void {
+    const playing = inGame();
+    if (renderer.menu === playing) {
+      renderer.menu = !playing;
+      resize();
     }
-    const now = nowMs / 1000;
-    for (const e of game.events) {
+    input.enabled = playing && !paused;
+    if (playing) {
+      if (paused) menu.pause();
+      else menu.hide();
+    } else if (!name) {
+      if (menu.current !== 'name') menu.askName(null);
+    } else if (room) {
+      menu.showRoom();
+    } else {
+      menu.lobby();
+    }
+  }
+
+  function handleEvents(events: GameEvent[], now: number): void {
+    for (const e of events) {
       if (e.type === 'sfx') audio.play(e.name);
       else if (e.type === 'flash') renderer.flash(now);
       else {
@@ -54,11 +103,100 @@ async function main(): Promise<void> {
         audio.say(e.text);
       }
     }
-    game.events.length = 0;
-    renderer.draw(game, now, acc / TICK);
+  }
+
+  conn.onStatus = (status) => {
+    if (status === 'open') {
+      conn.send({ t: 'hello', id: loadId() });
+      return;
+    }
+    // A new connection starts outside any game.
+    room = null;
+    paused = false;
+    mirror.reset();
+    renderer.menu = true;
+    resize();
+    input.enabled = false;
+    menu.connecting(status === 'lost');
+  };
+
+  conn.onMessage = (msg: ServerMessage) => {
+    const now = performance.now() / 1000;
+    switch (msg.t) {
+      case 'welcome':
+        saveId(msg.id);
+        name = msg.name;
+        menu.setName(name);
+        if (!name) menu.askName(null);
+        else if (menu.current === 'name' || menu.current === 'connecting') updateScreens();
+        break;
+      case 'lobby':
+        menu.setGames(msg.games);
+        break;
+      case 'room':
+        room = msg.room;
+        menu.setRoom(room);
+        if (!room) {
+          mirror.reset();
+          paused = false;
+        }
+        updateScreens();
+        break;
+      case 'level':
+        mirror.setLevel(msg.level);
+        break;
+      case 'state': {
+        renderer.snapshot(mirror);
+        mirror.apply(msg);
+        renderer.me = mirror.you;
+        if (lastSnapAt) snapGap = Math.min(0.2, Math.max(0.015, snapGap * 0.9 + (now - lastSnapAt) * 0.1));
+        lastSnapAt = now;
+        handleEvents(msg.events, now);
+        break;
+      }
+      case 'error':
+        menu.toast(msg.message);
+        break;
+    }
+  };
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('keydown', (e) => {
+    audio.unlock();
+    if (e.code === 'Escape' && inGame()) {
+      paused = !paused;
+      updateScreens();
+    }
+  });
+  window.addEventListener('pointerdown', () => audio.unlock());
+  window.addEventListener('gamepadconnected', () => audio.unlock());
+
+  const frame = (nowMs: number) => {
+    const now = nowMs / 1000;
+    if (inGame()) {
+      // Inputs go to the server only when they change.
+      const i = paused ? { dx: 0, dy: 0, fire: false, magic: false } : input.combined();
+      const key = `${i.dx},${i.dy},${+i.fire},${+i.magic}`;
+      if (key !== sentInput) {
+        sentInput = key;
+        conn.send({ t: 'input', ...i });
+      }
+      renderer.draw(mirror, now, (now - lastSnapAt) / snapGap);
+    } else {
+      sentInput = '';
+      // Drift slowly around the backdrop level.
+      const s = backdrop.level.starts[0] ?? { x: 0, y: 0 };
+      backdrop.camera = { x: s.x + 4 + Math.sin(now * 0.07) * 4, y: s.y + 3 + Math.cos(now * 0.05) * 3 };
+      renderer.draw(backdrop, now);
+    }
     requestAnimationFrame(frame);
   };
+
+  renderer.menu = true;
+  resize();
+  menu.connecting(false);
+  conn.connect();
   requestAnimationFrame(frame);
 }
 
-void main();
+main();

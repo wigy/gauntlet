@@ -3,3 +3,6 @@ dist/
 # Maps converted from VGMaps rips of Atari's Gauntlet (copyrighted) - regenerate with `npm run import:g1`
 public/levels/gauntlet1/
 .import-cache/
+
+# Saved player profiles from the game server
+data/

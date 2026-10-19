@@ -53,6 +53,17 @@ const ITEM_CHARS: Record<string, ItemKind> = { F: 'food', C: 'cider', P: 'potion
 const GENERATOR_CHARS: Record<string, MonsterKind> = { g: 'ghost', r: 'grunt', d: 'demon', l: 'lobber', o: 'sorcerer', x: 'death' };
 const MONSTER_CHARS: Record<string, MonsterKind> = { G: 'ghost', R: 'grunt', M: 'demon', L: 'lobber', O: 'sorcerer', X: 'death' };
 
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+
+/**
+ * The level's name, or '' when it only repeats the level number (arcade levels 1-7 are called "One".."Seven"),
+ * so announcements say "Level 1" rather than "Level 1: One".
+ */
+export function levelTitle(n: number, name: string): string {
+  const t = name.trim().toLowerCase();
+  return t === String(n) || t === NUMBER_WORDS[n] ? '' : name;
+}
+
 export function parseLevel(text: string): LevelData {
   const lines = text.replace(/\r/g, '').split('\n');
   const sep = lines.indexOf('---');

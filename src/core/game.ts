@@ -4,7 +4,7 @@ import {
   MONSTER_HIT_COOLDOWN, SHOT_COOLDOWN, SHOT_RADIUS, TREASURE_POINTS,
 } from './defs';
 import type { HeroClass, HeroDef, ItemKind, MonsterDef, MonsterKind } from './defs';
-import { Tile, isEmptyLevel, mod, parseLevel, populate, tileAt } from './level';
+import { Tile, isEmptyLevel, levelTitle, mod, parseLevel, populate, tileAt } from './level';
 import type { LevelData } from './level';
 import { Rng } from './rng';
 
@@ -22,6 +22,8 @@ export interface PlayerInput {
 export interface Player {
   slot: number;
   controller: string;
+  /** Display name; empty for local players, who go by their hero's title. */
+  name: string;
   hero: HeroClass;
   def: HeroDef;
   x: number;
@@ -96,6 +98,14 @@ export type GameEvent = { type: 'say'; text: string } | { type: 'sfx'; name: Sfx
 
 export type GameState = 'attract' | 'playing' | 'levelEnd' | 'gameover';
 
+export interface GameOptions {
+  /**
+   * Server-run game: players are added with addPlayer() instead of joining on FIRE, each player has their own camera
+   * (no shared-screen limit), potions hit what's around the drinker, and (re)spawns happen at the level start.
+   */
+  online?: boolean;
+}
+
 /**
  * The whole simulation. Pure logic, no DOM: advance with `step(inputs)` at a fixed TICK, read state for rendering,
  * and drain `events` for audio/announcements. Coordinates are in tiles; an entity's x/y is its centre.
@@ -127,6 +137,7 @@ export class Game {
     private readonly levelTexts: readonly string[],
     private readonly seed = 1,
     private readonly startLevel = 1,
+    private readonly options: GameOptions = {},
   ) {
     if (levelTexts.length === 0) throw new Error('no levels');
     this.rng = new Rng(seed);
@@ -169,7 +180,8 @@ export class Game {
       p.fy = 1;
     }
     this.updateCamera();
-    if (this.state !== 'attract') this.say(`Level ${n}: ${level.name}`);
+    const title = levelTitle(n, level.name);
+    if (this.state !== 'attract') this.say(title ? `Level ${n}: ${title}` : `Level ${n}`);
   }
 
   private spawnPoint(k: number): { x: number; y: number } {
@@ -229,11 +241,57 @@ export class Game {
     }
   }
 
+  /** Online: begin play with whoever has been added so far. */
+  start(): void {
+    this.state = 'playing';
+    this.loadLevel(this.startLevel);
+  }
+
+  /** Online: add a player at the level start, as `hero` if it's free. Returns null when all slots are taken. */
+  addPlayer(controller: string, name: string, hero?: HeroClass): Player | null {
+    const slot = this.players.indexOf(null);
+    if (slot < 0) return null;
+    if (!hero || this.players.some((p) => p?.hero === hero)) {
+      hero = HERO_ORDER.find((h) => !this.players.some((p) => p?.hero === h)) ?? HERO_ORDER[slot];
+    }
+    const p: Player = {
+      slot, controller, name, hero, def: HEROES[hero], x: 0, y: 0, fx: 0, fy: 1, health: 0, score: 0, keys: 0, potions: 0,
+      alive: false, shotCooldown: 0, meleeCooldown: 0, drainAcc: 0, warned: 0, prevMagic: false,
+    };
+    this.players[slot] = p;
+    if (this.state === 'attract') {
+      // Not started yet: start() will place everyone.
+      p.health = JOIN_HEALTH;
+      p.alive = true;
+    } else {
+      this.revive(p);
+    }
+    return p;
+  }
+
+  removePlayer(controller: string): void {
+    const slot = this.players.findIndex((p) => p?.controller === controller);
+    if (slot < 0) return;
+    const p = this.players[slot]!;
+    this.players[slot] = null;
+    this.shots = this.shots.filter((s) => s.owner !== slot);
+    this.say(`${this.who(p)} left`);
+  }
+
+  private who(p: Player): string {
+    return p.name || p.def.title;
+  }
+
   private handleJoins(inputs: ReadonlyMap<string, PlayerInput>): void {
     for (const [controller, input] of inputs) {
       const pressed = input.fire && !this.prevFire.get(controller);
       this.prevFire.set(controller, input.fire);
       if (!pressed) continue;
+      if (this.options.online) {
+        const player = this.players.find((p) => p && p.controller === controller);
+        if (player && !player.alive && (this.state === 'playing' || this.state === 'levelEnd')) this.revive(player);
+        continue;
+      }
 
       if (this.state === 'attract' || this.state === 'gameover') {
         this.newGame();
@@ -249,7 +307,7 @@ export class Game {
       const hero = HERO_ORDER.find((h) => !this.players.some((p) => p?.hero === h)) ?? HERO_ORDER[slot];
       const def = HEROES[hero];
       const p: Player = {
-        slot, controller, hero, def, x: 0, y: 0, fx: 0, fy: 1, health: 0, score: 0, keys: 0, potions: 0,
+        slot, controller, name: '', hero, def, x: 0, y: 0, fx: 0, fy: 1, health: 0, score: 0, keys: 0, potions: 0,
         alive: false, shotCooldown: 0, meleeCooldown: 0, drainAcc: 0, warned: 0, prevMagic: input.magic,
       };
       this.players[slot] = p;
@@ -264,7 +322,7 @@ export class Game {
   }
 
   private revive(p: Player): void {
-    const anchor = this.livingPlayers[0];
+    const anchor = this.options.online ? undefined : this.livingPlayers[0];
     const pos = anchor ? { x: anchor.x, y: anchor.y } : this.spawnPoint(p.slot);
     p.x = pos.x;
     p.y = pos.y;
@@ -272,7 +330,7 @@ export class Game {
     p.alive = true;
     p.warned = 0;
     this.sfx('join');
-    this.say(`${p.def.title} joins`);
+    this.say(`${this.who(p)} joins`);
   }
 
   // ---------------------------------------------------------------- players
@@ -359,7 +417,7 @@ export class Game {
       return;
     }
     // Shared screen: nobody may walk out of view of the others.
-    for (const o of this.players) {
+    for (const o of this.options.online ? [] : this.players) {
       if (!o || o === p || !o.alive) continue;
       if (Math.abs(this.dxw(o.x, nx)) > this.viewW - 2 || Math.abs(this.dyw(o.y, ny)) > this.viewH - 2) {
         const before = Math.abs(this.dxw(o.x, p.x)) > this.viewW - 2 || Math.abs(this.dyw(o.y, p.y)) > this.viewH - 2;
@@ -410,11 +468,17 @@ export class Game {
     this.sfx('magic');
     const power = 6 * p.def.magic;
     for (const m of this.monsters) {
-      if (m.dead || !this.onScreen(m.x, m.y)) continue;
+      if (m.dead || !this.inMagicRange(p, m.x, m.y)) continue;
       if (m.kind === 'death') this.killMonster(m, p, 1000);
       else this.damageMonster(m, power, p);
     }
-    for (const g of this.generators) if (!g.dead && this.onScreen(g.x, g.y)) this.damageGenerator(g, power / 2, p);
+    for (const g of this.generators) if (!g.dead && this.inMagicRange(p, g.x, g.y)) this.damageGenerator(g, power / 2, p);
+  }
+
+  /** Potions hit everything on screen: the shared screen locally, the drinker's own view online. */
+  private inMagicRange(p: Player, x: number, y: number): boolean {
+    if (!this.options.online) return this.onScreen(x, y);
+    return Math.abs(this.dxw(p.x, x)) <= this.viewW / 2 + 0.5 && Math.abs(this.dyw(p.y, y)) <= this.viewH / 2 + 0.5;
   }
 
   private hurtPlayer(p: Player, amount: number, armored = true): void {
@@ -425,15 +489,15 @@ export class Game {
       p.health = 0;
       p.alive = false;
       this.sfx('die');
-      this.say(`${p.def.title} has died`);
+      this.say(`${this.who(p)} has died`);
       return;
     }
     if (p.health < 100 && p.warned < 2) {
       p.warned = 2;
-      this.say(`${p.def.title} is about to die!`);
+      this.say(`${this.who(p)} is about to die!`);
     } else if (p.health < LOW_HEALTH_WARNING && p.warned < 1) {
       p.warned = 1;
-      this.say(`${p.def.title} needs food, badly!`);
+      this.say(`${this.who(p)} needs food, badly!`);
     }
   }
 
@@ -641,7 +705,7 @@ export class Game {
           // Shooting the food is a classic mistake.
           this.items.delete(key);
           s.ttl = 0;
-          if (it.kind !== 'potion' && shooter) this.say(`${shooter.def.title} shot the food!`);
+          if (it.kind !== 'potion' && shooter) this.say(`${this.who(shooter)} shot the food!`);
         }
       } else {
         for (const p of this.livingPlayers) {

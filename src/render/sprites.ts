@@ -1,3 +1,5 @@
+import { mod } from '../core/level';
+
 /**
  * Optional sprite images from public/sprites/<name>.png (see tools/slice-sprites.ts). Loading is fire-and-forget:
  * `get()` returns undefined until an image has loaded (or if it's missing), and the renderer falls back to shapes.
@@ -32,7 +34,7 @@ export class Sprites {
 
   /** Wall texture for a level, recoloured with a cached hue-rotated copy so levels don't all look alike. */
   wall(levelNumber: number): CanvasImageSource | undefined {
-    const v = (levelNumber - 1) % WALL_VARIANTS.length;
+    const v = mod(levelNumber - 1, WALL_VARIANTS.length);
     const cached = this.walls.get(v);
     if (cached) return cached;
     const [name, hue] = WALL_VARIANTS[v];

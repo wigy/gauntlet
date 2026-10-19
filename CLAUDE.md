@@ -2,13 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Web remake of Atari's 1985 coin-op **Gauntlet**: up to 4 players co-op on one screen (local keyboard and gamepads), TypeScript + Vite + Canvas 2D, no runtime dependencies.
+Web remake of Atari's 1985 coin-op **Gauntlet**: up to 4 players co-op online, one browser per player, through a lobby on a Node game server. TypeScript + Vite + Canvas 2D; the browser client has no runtime dependencies, the server uses `ws` (run with `tsx`).
 
 ## Commands
 
 ```bash
-npm run dev                 # Vite dev server
+npm run dev                 # Vite dev server, with the game server attached on the same port (/ws)
 npm run build               # typecheck + production build to dist/
+npm start                   # production: serve dist/ + game server (PORT, default 8080)
 npm run typecheck           # tsc --noEmit (this is the lint step; there is no ESLint)
 npm test                    # vitest run
 npx vitest run test/game.test.ts -t "opens doors"   # single file / single test
@@ -17,15 +18,18 @@ npm run import:g1 -- 9 78   # convert only these level numbers and print them as
 npm run sprites             # re-slice art/sheets/* into public/sprites/*.png
 ```
 
-URL parameters: `?levels=builtin|gauntlet1` (default `gauntlet1`, falls back to built-in if not imported), `?level=N` start level, `?seed=N` fixes the random seed.
+Server environment: `LEVELS=builtin|gauntlet1` (default `gauntlet1`, falls back to built-in if not imported), `PORT`, `DATA_DIR` (default `data/`, gitignored: saved players in `players.json`). URL parameter `?level=N` makes games you create start at level N (for testing).
 
 ## Architecture
 
-- **`src/core/` is pure simulation, no DOM.** `Game` (`game.ts`) advances one fixed `TICK` (1/60 s) per `step(inputs)`, where `inputs` is `Map<controllerId, PlayerInput>`. Rendering, audio and input only read game state and drain `game.events` (`say` / `sfx` / `flash`). Keep it that way: the determinism (all randomness goes through the seeded `Rng`) is what the tests rely on, and it keeps a lockstep online multiplayer possible later.
-- **Controllers vs. players**: `InputManager` (`src/input/`) reports every controller (`kb1` = arrows + Z fire + X potion, `pad0`..`pad3`) every tick, joined or not. `Game.handleJoins` binds a controller to a free player slot on a FIRE press, assigning the first unused hero. FIRE also revives a dead player, and starts a new game from the attract or game-over screen.
+- **`src/core/` is pure simulation, no DOM.** `Game` (`game.ts`) advances one fixed `TICK` (1/60 s) per `step(inputs)`, where `inputs` is `Map<controllerId, PlayerInput>`. Rendering, audio and input only read game state and drain `game.events` (`say` / `sfx` / `flash`). Keep it that way: the determinism (all randomness goes through the seeded `Rng`) is what the tests rely on, and the server runs this same code.
+- **Online play (server-authoritative)**: `server/lobby.ts` (transport-agnostic, unit-tested in `test/lobby.test.ts`) holds clients, rooms and saved players (`server/store.ts`). A room is `waiting` (anyone can join, any member can start), then `playing` (others can still jump in at the level start, up to 4), then `over` (back to the lobby after 5 s). It steps each running `Game` at 60 Hz with `{ online: true }` and sends every member a snapshot every 2 ticks, limited to entities near their hero (`AOI_X/AOI_Y`); full level tiles go out once per level, then only changed tiles (opened doors) and the item list when it changes. `server/attach.ts` adds the WebSocket on `/ws` to any HTTP server (the Vite plugin in `vite.config.ts` in dev, `server/main.ts` in production). Messages are typed in `src/net/protocol.ts`.
+- **Client**: `src/main.ts` connects (`src/net/connection.ts`, auto-reconnect), shows the DOM screens in `src/ui/menu.ts` (name, lobby, waiting room, Esc pause menu), sends input only when it changes, and applies snapshots to `src/net/mirror.ts`, a `Game`-shaped copy whose entities keep their identity across snapshots so the renderer can interpolate and diff them. The player id lives in localStorage (`gauntlet.playerId`) and the server keeps the name for it. No client-side prediction yet, so movement has one round trip of input lag.
+- **`online` mode in `Game`**: players come from `addPlayer()`/`removePlayer()` and `start()` instead of FIRE joins, there's no shared-screen limit, potions hit what's in the drinker's own view, and joins and revives happen at the level start. Without it (the default, used by `test/game.test.ts`), `handleJoins` binds a controller to a free slot on FIRE as in local co-op.
+- **Controllers**: `InputManager` (`src/input/`) reports `kb1` (arrows, Z fire, X potion) and `pad0`..`pad3`; online, `combined()` merges them into one player's input. It ignores keys while a menu or text field is in use (`enabled`).
 - **Coordinates are in tiles.** An entity's `x`/`y` is its centre, and collision uses axis-aligned boxes (`ENTITY_RADIUS`). Levels can wrap on x and/or y (torus mazes), so **always** use `game.dxw()`/`dyw()` for deltas between positions and `wrapX`/`wrapY` after moving. Never subtract coordinates directly. `tileAt()` handles wrapping and treats out-of-bounds as wall.
 - Monsters are found through a tile-keyed spatial hash (`buckets`). Call `rebucket()` after moving one and `unbucket()` when killing one. Generators live in `generatorAt` (static, keyed by tile index).
-- **Shared screen**: the renderer sets `game.viewW/viewH` (in tiles) on resize. The camera is the wrapped centroid of the living heroes, and `movePlayerAxis` stops heroes walking out of each other's view, as in the arcade.
+- **Camera**: online, the mirror's camera follows your own hero. In local mode, the renderer sets `game.viewW/viewH` (in tiles) on resize, the camera is the wrapped centroid of the living heroes, and `movePlayerAxis` stops heroes walking out of each other's view, as in the arcade.
 - Tuning numbers (hero stats, monster stats, health and food values, limits) are all in `src/core/defs.ts`.
 
 ## Levels
@@ -45,4 +49,4 @@ URL parameters: `?levels=builtin|gauntlet1` (default `gauntlet1`, falls back to 
 
 ## Not implemented yet
 
-Online multiplayer, Gauntlet II mechanics (stun tiles, force fields, the dragon, "It"), invisibility and other special potions, friendly-fire stun, directional and animated sprites (heroes and monsters have a single front-facing frame).
+Client-side prediction, accounts/auth (a player id is just a bearer token in localStorage), Gauntlet II mechanics (stun tiles, force fields, the dragon, "It"), invisibility and other special potions, friendly-fire stun, directional and animated sprites (heroes and monsters have a single front-facing frame).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Tile, bfsDistances, isEmptyLevel, parseLevel, populate } from '../src/core/level';
+import { Tile, bfsDistances, isEmptyLevel, levelTitle, parseLevel, populate } from '../src/core/level';
 import { BUILTIN_LEVELS } from '../src/levels/builtin';
 
 const OPEN_MAP = `name: Open
@@ -60,5 +60,15 @@ describe('populate', () => {
     const s = a.starts[0];
     expect(a.tiles[s.y * a.width + s.x]).toBe(Tile.Floor);
     expect(bfsDistances(a, a.starts)[5 * a.width + 8]).toBeGreaterThan(0);
+  });
+});
+
+describe('levelTitle', () => {
+  it('drops names that only repeat the level number', () => {
+    expect(levelTitle(1, 'One')).toBe('');
+    expect(levelTitle(7, 'seven')).toBe('');
+    expect(levelTitle(3, '3')).toBe('');
+    expect(levelTitle(8, 'Go Back')).toBe('Go Back');
+    expect(levelTitle(2, 'One')).toBe('One');
   });
 });

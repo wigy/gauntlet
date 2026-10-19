@@ -1,6 +1,6 @@
 import { HERO_ORDER, HEROES, JOIN_HEALTH, LOW_HEALTH_WARNING, MONSTERS } from '../core/defs';
 import type { ItemKind } from '../core/defs';
-import { Tile, tileAt } from '../core/level';
+import { Tile, levelTitle, mod, tileAt } from '../core/level';
 import type { Game, Generator, Monster, Player, Shot } from '../core/game';
 import { Particles, edgeShades, glow, shadowBlob, vignette } from './fx';
 import { Sprites, silhouette } from './sprites';
@@ -50,10 +50,8 @@ interface PlayerTrack {
   pendingAt: number;
 }
 
-export interface Hint {
-  join: string;
-  label: string;
-}
+/** What the renderer reads: a local Game, or the client's Mirror of a server game. */
+export type GameView = Pick<Game, 'state' | 'levelNumber' | 'level' | 'players' | 'monsters' | 'generators' | 'items' | 'shots' | 'camera' | 'viewW' | 'viewH' | 'dxw' | 'dyw'>;
 
 function rgba(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16);
@@ -105,13 +103,18 @@ export class Renderer {
   private seeds = new WeakMap<object, number>();
   private tracks: PlayerTrack[] = [0, 1, 2, 3].map(() => ({ p: null, alive: false, health: 0, score: 0, pending: 0, pendingAt: 0 }));
 
-  constructor(private canvas: HTMLCanvasElement, private hints: readonly Hint[]) {
+  /** Menu backdrop: the maze fills the whole window, dimmed, with no HUD. */
+  menu = false;
+  /** Our own controller id in an online game, to highlight our hero; null for local play. */
+  me: string | null = null;
+
+  constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     this.light = document.createElement('canvas');
     this.lctx = this.light.getContext('2d')!;
   }
 
-  resize(game: Game): void {
+  resize(game: GameView): void {
     const dpr = window.devicePixelRatio || 1;
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -123,7 +126,7 @@ export class Renderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = 'high';
-    this.playW = Math.max(200, w - HUD_W);
+    this.playW = this.menu ? w : Math.max(200, w - HUD_W);
     this.viewH = h;
     this.tile = Math.max(16, Math.floor(Math.min(this.playW / 18, h / 13)));
     // The light map is low resolution; smoothing when it's stretched gives soft edges for free.
@@ -134,7 +137,7 @@ export class Renderer {
   }
 
   /** Remember where everything is before a simulation tick, so draw() can interpolate towards the new state. */
-  snapshot(game: Game): void {
+  snapshot(game: GameView): void {
     for (const p of game.players) if (p) this.prev.set(p, { x: p.x, y: p.y });
     for (const m of game.monsters) this.prev.set(m, { x: m.x, y: m.y });
     for (const s of game.shots) this.prev.set(s, { x: s.x, y: s.y });
@@ -152,7 +155,7 @@ export class Renderer {
   }
 
   /** `alpha` is how far (0..1) we are between the previous tick and the current one. */
-  draw(game: Game, now: number, alpha = 1): void {
+  draw(game: GameView, now: number, alpha = 1): void {
     const { ctx } = this;
     const h = this.viewH;
     const dt = Math.min(0.1, Math.max(0, now - this.lastNow));
@@ -193,7 +196,7 @@ export class Renderer {
     this.drawOverlay(game, h, now);
     ctx.restore();
 
-    this.drawHud(game, h, now);
+    if (!this.menu) this.drawHud(game, h, now);
   }
 
   // ---------------------------------------------------------------- coordinates
@@ -202,15 +205,15 @@ export class Renderer {
     return Math.round(v * this.dpr) / this.dpr;
   }
 
-  private sx(game: Game, x: number): number {
+  private sx(game: GameView, x: number): number {
     return game.dxw(this.cam.x, x) * this.tile + this.offX;
   }
 
-  private sy(game: Game, y: number): number {
+  private sy(game: GameView, y: number): number {
     return game.dyw(this.cam.y, y) * this.tile + this.offY;
   }
 
-  private lerp(game: Game, cur: Pos, prev: Pos | null | undefined, maxJump = 2): Pos {
+  private lerp(game: GameView, cur: Pos, prev: Pos | null | undefined, maxJump = 2): Pos {
     if (!prev) return cur;
     const dx = game.dxw(prev.x, cur.x);
     const dy = game.dyw(prev.y, cur.y);
@@ -218,17 +221,17 @@ export class Renderer {
     return { x: prev.x + dx * this.alpha, y: prev.y + dy * this.alpha };
   }
 
-  private pos(game: Game, e: Pos): Pos {
+  private pos(game: GameView, e: Pos): Pos {
     return this.lerp(game, e, this.prev.get(e));
   }
 
   /** Distance moved during the last tick, for walk animations. */
-  private moving(game: Game, e: Pos): boolean {
+  private moving(game: GameView, e: Pos): boolean {
     const p = this.prev.get(e);
     return !!p && Math.hypot(game.dxw(p.x, e.x), game.dyw(p.y, e.y)) > 0.004;
   }
 
-  private visible(game: Game, x: number, y: number): boolean {
+  private visible(game: GameView, x: number, y: number): boolean {
     return Math.abs(game.dxw(this.cam.x, x)) <= game.viewW / 2 + 1.2 && Math.abs(game.dyw(this.cam.y, y)) <= game.viewH / 2 + 1.2;
   }
 
@@ -238,13 +241,13 @@ export class Renderer {
     return s;
   }
 
-  private livingCount(game: Game): number {
+  private livingCount(game: GameView): number {
     return game.players.reduce((n, p) => n + (p && p.alive ? 1 : 0), 0);
   }
 
   // ---------------------------------------------------------------- effects from state changes
 
-  private trackChanges(game: Game, now: number): void {
+  private trackChanges(game: GameView, now: number): void {
     const fx = this.particles;
     if (game.levelNumber !== this.levelSeen) {
       this.levelSeen = game.levelNumber;
@@ -363,11 +366,11 @@ export class Renderer {
 
   // ---------------------------------------------------------------- maze
 
-  private drawMaze(game: Game, h: number, now: number): void {
+  private drawMaze(game: GameView, h: number, now: number): void {
     const { ctx, tile } = this;
     const lvl = game.level;
-    const wall = WALL_COLORS[(game.levelNumber - 1) % WALL_COLORS.length];
-    const floor = FLOOR_COLORS[(game.levelNumber - 1) % FLOOR_COLORS.length];
+    const wall = WALL_COLORS[mod(game.levelNumber - 1, WALL_COLORS.length)];
+    const floor = FLOOR_COLORS[mod(game.levelNumber - 1, FLOOR_COLORS.length)];
     const wallTex = this.sprites.wall(game.levelNumber);
     const floorTex = this.sprites.get('floor');
     const doorTex = this.sprites.get('door');
@@ -487,7 +490,7 @@ export class Renderer {
 
   // ---------------------------------------------------------------- entities
 
-  private drawEntities(game: Game, now: number): void {
+  private drawEntities(game: GameView, now: number): void {
     const { ctx, tile } = this;
     const blob = shadowBlob();
     type Drawable = { y: number; draw: () => void };
@@ -614,7 +617,7 @@ export class Renderer {
     ctx.stroke();
   }
 
-  private drawMonster(game: Game, m: Monster, px: number, py: number, now: number): void {
+  private drawMonster(game: GameView, m: Monster, px: number, py: number, now: number): void {
     const { ctx, tile } = this;
     const r = tile * (0.28 + 0.04 * m.rank);
     const seed = this.seed(m);
@@ -702,7 +705,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawHero(game: Game, p: Player, px: number, py: number, now: number): void {
+  private drawHero(game: GameView, p: Player, px: number, py: number, now: number): void {
     const { ctx, tile } = this;
     const r = tile * 0.4;
     const seed = p.slot * 1.7;
@@ -731,7 +734,8 @@ export class Renderer {
       ctx.drawImage(shadow, px - sw / 2, py + tile * 0.38 - sw * 0.17, sw, sw * 0.34);
       this.drawSprite(img, px, py - lift, size, p.fx < 0, sy);
       this.drawHitFlash(p, img, px, py - lift, size, p.fx < 0, now, sy, '#ff3030');
-      if (this.livingCount(game) > 1) this.drawTag(`P${p.slot + 1}`, p.def.color, px, py - lift - size * 0.55);
+      const label = this.me === null ? (this.livingCount(game) > 1 ? `P${p.slot + 1}` : '') : p.controller === this.me ? '' : p.name;
+      if (label) this.drawTag(label, p.def.color, px, py - lift - size * 0.55);
       return;
     }
     this.circle(px, py, r, p.def.color);
@@ -784,7 +788,7 @@ export class Renderer {
     ctx.globalAlpha = a;
   }
 
-  private drawShot(game: Game, s: Shot): void {
+  private drawShot(game: GameView, s: Shot): void {
     const { ctx, tile } = this;
     const p = this.pos(game, s);
     if (!this.visible(game, p.x, p.y)) return;
@@ -837,7 +841,7 @@ export class Renderer {
 
   // ---------------------------------------------------------------- lighting and particles
 
-  private drawSmoke(game: Game): void {
+  private drawSmoke(game: GameView): void {
     const { ctx, tile } = this;
     for (const p of this.particles.list) {
       if (p.kind !== 'smoke') continue;
@@ -867,7 +871,7 @@ export class Renderer {
   }
 
   /** Additive glows and particles drawn after lighting, so they read as light sources. */
-  private drawEmissive(game: Game): void {
+  private drawEmissive(game: GameView): void {
     const { ctx, tile } = this;
     ctx.globalCompositeOperation = 'lighter';
     for (const l of this.lights) {
@@ -920,7 +924,7 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  private drawScreenEffects(game: Game, h: number, now: number): void {
+  private drawScreenEffects(game: GameView, h: number, now: number): void {
     const { ctx } = this;
     const w = this.playW;
 
@@ -954,100 +958,42 @@ export class Renderer {
 
   // ---------------------------------------------------------------- overlays and HUD
 
-  private drawOverlay(game: Game, h: number, now: number): void {
+  private drawOverlay(game: GameView, h: number, now: number): void {
     const { ctx } = this;
     const w = this.playW;
     const cx = w / 2;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    if (game.state === 'attract' || game.state === 'gameover') {
+    if (game.state === 'attract') {
+      // Backdrop behind the lobby screens.
       const bg = ctx.createLinearGradient(0, 0, 0, h);
-      bg.addColorStop(0, 'rgba(6,4,12,0.92)');
-      bg.addColorStop(0.5, 'rgba(6,4,12,0.72)');
-      bg.addColorStop(1, 'rgba(6,4,12,0.94)');
+      bg.addColorStop(0, 'rgba(6,4,12,0.85)');
+      bg.addColorStop(0.5, 'rgba(6,4,12,0.55)');
+      bg.addColorStop(1, 'rgba(6,4,12,0.88)');
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, w, h);
+    }
 
-      const over = game.state === 'gameover';
+    if (game.state === 'gameover') {
+      ctx.fillStyle = 'rgba(6,4,12,0.7)';
+      ctx.fillRect(0, 0, w, h);
       const size = Math.floor(Math.min(w / 7, h / 7, 110));
-      const ty = h * 0.2;
+      const ty = h * 0.42;
       ctx.font = `900 ${size}px ${TITLE_FONT}`;
       const grad = ctx.createLinearGradient(0, ty - size / 2, 0, ty + size / 2);
-      if (over) {
-        grad.addColorStop(0, '#ffd0c0');
-        grad.addColorStop(0.5, '#e04020');
-        grad.addColorStop(1, '#701008');
-      } else {
-        grad.addColorStop(0, '#fff6d0');
-        grad.addColorStop(0.5, '#f0b030');
-        grad.addColorStop(1, '#8a4a08');
-      }
+      grad.addColorStop(0, '#ffd0c0');
+      grad.addColorStop(0.5, '#e04020');
+      grad.addColorStop(1, '#701008');
       ctx.save();
-      ctx.shadowColor = over ? 'rgba(255,60,20,0.55)' : 'rgba(255,170,40,0.5)';
+      ctx.shadowColor = 'rgba(255,60,20,0.55)';
       ctx.shadowBlur = size * 0.4;
       ctx.fillStyle = grad;
-      ctx.fillText(over ? 'GAME OVER' : 'GAUNTLET', cx, ty);
+      ctx.fillText('GAME OVER', cx, ty);
       ctx.restore();
-      ctx.lineWidth = Math.max(1, size / 50);
-      ctx.strokeStyle = 'rgba(40,20,0,0.6)';
-      ctx.strokeText(over ? 'GAME OVER' : 'GAUNTLET', cx, ty);
-
-      ctx.font = `600 ${Math.max(12, Math.round(size * 0.16))}px ${UI_FONT}`;
-      ctx.fillStyle = 'rgba(230,210,170,0.7)';
-      ctx.fillText(over ? 'Your quest has ended' : 'Four heroes. One dungeon. No way back.', cx, ty + size * 0.72);
-
-      // The four heroes, bobbing gently.
-      const spacing = Math.min(w / 5, 150);
-      const hy = h * 0.47;
-      const hs = Math.min(spacing * 0.75, h * 0.14);
-      HERO_ORDER.forEach((hero, i) => {
-        const hx = cx + (i - 1.5) * spacing;
-        const def = HEROES[hero];
-        const bob = Math.sin(now * 2.2 + i * 1.3) * hs * 0.04;
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.6;
-        ctx.drawImage(glow(def.color), hx - hs * 0.8, hy + hs * 0.38 - hs * 0.25, hs * 1.6, hs * 0.5);
-        ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = 'source-over';
-        const img = this.sprites.get(hero);
-        if (img) this.drawSprite(img, hx, hy + bob, hs, false);
-        else this.circle(hx, hy + bob, hs * 0.35, def.color);
-        ctx.font = `700 ${Math.max(11, Math.round(hs * 0.17))}px ${TITLE_FONT}`;
-        ctx.fillStyle = def.color;
-        ctx.fillText(def.title.toUpperCase(), hx, hy + hs * 0.72);
-      });
-
-      const pulse = 0.55 + 0.45 * Math.sin(now * 4);
-      ctx.font = `800 ${Math.max(14, Math.round(size * 0.22))}px ${UI_FONT}`;
-      ctx.fillStyle = `rgba(255,230,160,${pulse})`;
-      ctx.fillText('PRESS FIRE TO JOIN', cx, h * 0.66);
-
-      const lineH = 24;
-      const cardW = Math.min(w - 40, 520);
-      const cardH = this.hints.length * lineH + 52;
-      const cardY = h * 0.71;
-      ctx.fillStyle = 'rgba(255,255,255,0.045)';
-      ctx.strokeStyle = 'rgba(255,220,150,0.16)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(cx - cardW / 2, cardY, cardW, cardH, 12);
-      ctx.fill();
-      ctx.stroke();
-      ctx.font = `500 14px ${UI_FONT}`;
-      this.hints.forEach((hint, i) => {
-        const y = cardY + 22 + i * lineH;
-        ctx.textAlign = 'right';
-        ctx.fillStyle = 'rgba(240,200,120,0.9)';
-        ctx.fillText(hint.label, cx - 10, y);
-        ctx.textAlign = 'left';
-        ctx.fillStyle = 'rgba(235,235,245,0.85)';
-        ctx.fillText(hint.join, cx + 10, y);
-      });
-      ctx.textAlign = 'center';
-      ctx.font = `400 13px ${UI_FONT}`;
-      ctx.fillStyle = 'rgba(200,200,215,0.55)';
-      ctx.fillText('Up to 4 players · hold FIRE to stand and shoot · don’t shoot the food', cx, cardY + cardH - 16);
+      ctx.font = `600 ${Math.max(13, Math.round(size * 0.18))}px ${UI_FONT}`;
+      ctx.fillStyle = `rgba(230,210,170,${0.55 + 0.25 * Math.sin(now * 3)})`;
+      ctx.fillText('Back to the lobby in a moment…', cx, ty + size * 0.8);
     }
 
     if (game.state === 'levelEnd') {
@@ -1086,7 +1032,7 @@ export class Renderer {
     }
   }
 
-  private drawHud(game: Game, h: number, now: number): void {
+  private drawHud(game: GameView, h: number, now: number): void {
     const { ctx } = this;
     const x = this.playW;
     const bg = ctx.createLinearGradient(x, 0, x + HUD_W, h);
@@ -1117,7 +1063,7 @@ export class Renderer {
     ctx.fillText(`LEVEL ${game.levelNumber}`, cx, 52);
     ctx.font = `400 11px ${UI_FONT}`;
     ctx.fillStyle = 'rgba(210,205,225,0.55)';
-    ctx.fillText(this.ellipsize(game.level.name, HUD_W - 30), cx, 67);
+    ctx.fillText(this.ellipsize(levelTitle(game.levelNumber, game.level.name), HUD_W - 30), cx, 67);
     const sep = ctx.createLinearGradient(x + 20, 0, x + HUD_W - 20, 0);
     sep.addColorStop(0, 'rgba(240,180,70,0)');
     sep.addColorStop(0.5, 'rgba(240,180,70,0.5)');
@@ -1130,18 +1076,22 @@ export class Renderer {
     for (let slot = 0; slot < 4; slot++) this.drawPlayerCard(game, slot, x + 10, top + slot * panelH, HUD_W - 20, panelH - 10, now);
   }
 
-  private drawPlayerCard(game: Game, slot: number, x: number, y: number, w: number, h: number, now: number): void {
+  private drawPlayerCard(game: GameView, slot: number, x: number, y: number, w: number, h: number, now: number): void {
     const { ctx } = this;
     const p = game.players[slot];
-    const hero = p ? p.def : HEROES[HERO_ORDER[slot]];
-    const heroClass = p ? p.hero : HERO_ORDER[slot];
+    // Empty slots show the heroes nobody has picked yet, in order.
+    const free = HERO_ORDER.filter((h) => !game.players.some((o) => o?.hero === h));
+    const emptyIndex = game.players.slice(0, slot).filter((o) => !o).length;
+    const heroClass = p ? p.hero : (free[emptyIndex] ?? HERO_ORDER[slot]);
+    const hero = HEROES[heroClass];
 
     const bg = ctx.createLinearGradient(x, y, x + w, y + h);
     bg.addColorStop(0, rgba(hero.color, p ? 0.2 : 0.06));
     bg.addColorStop(1, 'rgba(255,255,255,0.02)');
+    const mine = !!p && p.controller === this.me;
     ctx.fillStyle = bg;
-    ctx.strokeStyle = p ? rgba(hero.color, 0.55) : 'rgba(255,255,255,0.08)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = p ? rgba(hero.color, mine ? 0.95 : 0.55) : 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = mine ? 2 : 1;
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, 10);
     ctx.fill();
@@ -1176,20 +1126,32 @@ export class Renderer {
     const tx = pcx + pr + 12;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.font = `700 15px ${TITLE_FONT}`;
     ctx.fillStyle = p ? hero.color : 'rgba(220,215,235,0.5)';
-    ctx.fillText(p ? hero.title.toUpperCase() : `PLAYER ${slot + 1}`, tx, y + 27);
+    if (p?.name) {
+      ctx.font = `700 15px ${UI_FONT}`;
+      ctx.fillText(this.ellipsize(p.name, w - (tx - x) - 60), tx, y + 27);
+    } else {
+      ctx.font = `700 15px ${TITLE_FONT}`;
+      ctx.fillText(p ? hero.title.toUpperCase() : `PLAYER ${slot + 1}`, tx, y + 27);
+    }
 
     if (!p) {
       ctx.font = `500 12px ${UI_FONT}`;
       ctx.fillStyle = `rgba(220,215,235,${0.35 + 0.25 * Math.sin(now * 3 + slot)})`;
-      ctx.fillText('Press FIRE to join', tx, y + 46);
+      ctx.fillText(this.me === null ? 'Press FIRE to join' : 'Open slot', tx, y + 46);
       return;
     }
 
     ctx.font = `600 13px ${UI_FONT}`;
     ctx.fillStyle = '#f2d890';
-    ctx.fillText(p.score.toLocaleString('en-US'), tx, y + 46);
+    const score = p.score.toLocaleString('en-US');
+    ctx.fillText(score, tx, y + 46);
+    if (p.name) {
+      const sw = ctx.measureText(score).width;
+      ctx.font = `500 11px ${UI_FONT}`;
+      ctx.fillStyle = rgba(hero.color, 0.8);
+      ctx.fillText(`· ${hero.title}${mine ? ' (you)' : ''}`, tx + sw + 6, y + 46);
+    }
 
     const barX = x + 12;
     const barY = y + 66;
