@@ -5,7 +5,7 @@
  *   npm run sprites -- <sheet-dir>
  *
  * (The image generator may save JPEG data under a .png name; both formats are accepted.)
- * Expects heroes, monsters, items (sprites on a flat magenta background, spaced apart) and tiles
+ * Expects heroes, monsters, items, g2-monsters, g2-items (sprites on a flat magenta background, spaced apart) and tiles
  * (a 2x2 grid of square textures) as .png or .jpg in <sheet-dir>. Sprites are found as connected blobs of non-magenta pixels and named
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
  * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
@@ -22,6 +22,8 @@ const SHEETS: Record<string, string[]> = {
   heroes: ['warrior', 'valkyrie', 'wizard', 'elf'],
   monsters: ['ghost', 'grunt', 'demon', 'lobber', 'sorcerer', 'death'],
   items: ['food', 'cider', 'potion', 'key', 'treasure', 'generator-crate', 'potion-purple', 'treasure-gold', 'generator'],
+  'g2-monsters': ['supersorcerer', 'dragon', 'thief', 'acid'],
+  'g2-items': ['amulet', 'poison', 'it'],
 };
 const TILES = ['wall-orange', 'floor', 'wall-teal', 'door'];
 

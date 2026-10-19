@@ -17,7 +17,7 @@ const DEFAULT_DATA_DIR = join(homedir(), '.gauntlet');
 
 export function attachGameServer(server: Server, dataDir = process.env.DATA_DIR || DEFAULT_DATA_DIR): { lobby: Lobby; close(): void } {
   const store = new PlayerStore(join(dataDir, 'players.json'));
-  const levels = new LevelLibrary({ customDir: join(dataDir, 'levels'), arcadeDir: 'public/levels/gauntlet1', preferred: process.env.LEVELS });
+  const levels = new LevelLibrary({ customDir: join(dataDir, 'levels'), arcadeDir: 'public/levels/gauntlet1', arcade2Dir: 'public/levels/gauntlet2', preferred: process.env.LEVELS });
   const lobby = new Lobby(levels, store);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 

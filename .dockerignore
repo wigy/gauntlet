@@ -4,6 +4,7 @@ dist
 .claude
 .import-cache
 public/levels/gauntlet1
+public/levels/gauntlet2
 *.log
 docs
 README.md

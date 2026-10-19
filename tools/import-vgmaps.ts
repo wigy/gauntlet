@@ -15,28 +15,16 @@
  * Walls vs floor are told apart by 2-means clustering of each cell's average colour (wall cluster = brighter one);
  * a cell that is mostly pure black is an exit.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
+import { BASE, fetchCached } from './vgmaps';
 
-const BASE = 'https://www.vgmaps.com/Atlas/Arcade/';
-const CACHE = '.import-cache';
 const OUT = 'public/levels/gauntlet1';
 const CELL = 16;
 const SIZE = 33;
 
 type RGB = [number, number, number];
-
-async function fetchCached(file: string): Promise<Buffer> {
-  mkdirSync(CACHE, { recursive: true });
-  const path = join(CACHE, file);
-  if (existsSync(path)) return readFileSync(path);
-  const res = await fetch(BASE + encodeURIComponent(file));
-  if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  writeFileSync(path, buf);
-  return buf;
-}
 
 async function listLevels(): Promise<{ num: number; file: string; name: string }[]> {
   const html = (await fetchCached('index.htm')).toString('latin1');

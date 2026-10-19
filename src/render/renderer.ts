@@ -1,7 +1,9 @@
-import { HERO_ORDER, HEROES, JOIN_HEALTH, LOW_HEALTH_WARNING, MONSTERS } from '../core/defs';
+import { AMULET_NAMES, HERO_ORDER, HEROES, JOIN_HEALTH, LOW_HEALTH_WARNING, MONSTERS } from '../core/defs';
 import type { ItemKind } from '../core/defs';
-import { Tile, levelTitle, mod, tileAt } from '../core/level';
+import { Tile, isSolid, isWallLike, levelTitle, mod, tileAt } from '../core/level';
+import { forceFieldOn } from '../core/game';
 import type { Game, Generator, Monster, Player, Shot } from '../core/game';
+import { drawTileOverlay } from './tiles';
 import { Particles, edgeShades, glow, shadowBlob, vignette } from './fx';
 import { Sprites, silhouette } from './sprites';
 import type { SpriteName } from './sprites';
@@ -11,8 +13,12 @@ const FLOOR_COLORS = ['#26243a', '#2a2018', '#1c2a2a', '#2a1c26', '#1a2230'];
 const HUD_W = 240;
 const TITLE_FONT = `'Cinzel', 'Trajan Pro', Georgia, serif`;
 const UI_FONT = `'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif`;
-const ITEM_SPRITES: Record<ItemKind, SpriteName> = { food: 'food', cider: 'cider', potion: 'potion', key: 'key', treasure: 'treasure-gold' };
-const ITEM_GLOW: Record<ItemKind, string> = { food: '#ffb070', cider: '#ffd070', potion: '#70a8ff', key: '#ffe060', treasure: '#ffd040' };
+const ITEM_SPRITES: Record<ItemKind, SpriteName> = {
+  food: 'food', cider: 'cider', potion: 'potion', key: 'key', treasure: 'treasure-gold', amulet: 'amulet', poison: 'poison', it: 'it',
+};
+const ITEM_GLOW: Record<ItemKind, string> = {
+  food: '#ffb070', cider: '#ffd070', potion: '#70a8ff', key: '#ffe060', treasure: '#ffd040', amulet: '#ffe8a0', poison: '#80ff60', it: '#ffffff',
+};
 /** Light a hero carries, in tiles. Everything further away fades towards AMBIENT. */
 const HERO_LIGHT = 8;
 const AMBIENT = '#5a566e';
@@ -51,7 +57,7 @@ interface PlayerTrack {
 }
 
 /** What the renderer reads: a local Game, or the client's Mirror of a server game. */
-export type GameView = Pick<Game, 'state' | 'levelNumber' | 'level' | 'players' | 'monsters' | 'generators' | 'items' | 'shots' | 'camera' | 'viewW' | 'viewH' | 'dxw' | 'dyw'>;
+export type GameView = Pick<Game, 'state' | 'levelNumber' | 'level' | 'players' | 'monsters' | 'generators' | 'items' | 'shots' | 'camera' | 'time' | 'viewW' | 'viewH' | 'dxw' | 'dyw'>;
 
 function rgba(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16);
@@ -300,7 +306,7 @@ export class Renderer {
 
     const shots = new Map<Shot, Tracked>();
     for (const s of game.shots) {
-      const color = s.kind === 'arrow' ? (game.players[s.owner]?.def.color ?? '#ffffff') : s.kind === 'fireball' ? '#ff8030' : '#b0a8a0';
+      const color = s.kind === 'arrow' ? (game.players[s.owner]?.def.color ?? '#ffffff') : s.kind === 'super' ? '#fff0a0' : s.kind === 'fireball' ? '#ff8030' : '#b0a8a0';
       shots.set(s, { x: s.x, y: s.y, color, kind: s.kind });
       if (s.kind === 'fireball' && Math.random() < 0.35) {
         fx.add({ x: s.x, y: s.y, kind: 'spark', color: '#ff9030', vx: (Math.random() - 0.5) * 0.8, vy: (Math.random() - 0.5) * 0.8, z: 0.3, vz: 0.5, size: 0.05, life: 0.3 });
@@ -381,7 +387,8 @@ export class Renderer {
     const y0 = Math.floor(this.cam.y - halfH);
     const ox = (x0 - this.cam.x) * tile + this.offX;
     const oy = (y0 - this.cam.y) * tile + this.offY;
-    const isWall = (x: number, y: number) => tileAt(lvl, x, y) === Tile.Wall;
+    const isWall = (x: number, y: number) => isWallLike(tileAt(lvl, x, y));
+    const fieldOn = forceFieldOn(game.time);
 
     for (let j = 0; j <= halfH * 2 + 1; j++) {
       const py = this.snap(oy + j * tile);
@@ -395,7 +402,7 @@ export class Renderer {
         const tw = this.snap(ox + (i + 1) * tile) - px;
         const t = tileAt(lvl, tx, ty);
 
-        if (t === Tile.Wall) {
+        if (isWallLike(t)) {
           if (wallTex) {
             ctx.drawImage(wallTex, px, py, tw, th);
           } else {
@@ -423,6 +430,7 @@ export class Renderer {
             ctx.fillStyle = 'rgba(0,0,0,0.5)';
             ctx.fillRect(px, py + th - edge * 0.6, tw, edge * 0.6);
           }
+          if (t !== Tile.Wall) this.tileOverlay(game, t, tx, ty, px, py, tw, now, fieldOn);
           continue;
         }
 
@@ -456,9 +464,23 @@ export class Renderer {
           }
         } else if (t === Tile.Exit) {
           this.drawExit(px + tw / 2, py + th / 2, now);
+        } else if (t !== Tile.Floor) {
+          this.tileOverlay(game, t, tx, ty, px, py, tw, now, fieldOn);
         }
       }
     }
+  }
+
+  private tileOverlay(game: GameView, t: Tile, tx: number, ty: number, px: number, py: number, s: number, now: number, fieldOn: boolean): void {
+    const lvl = game.level;
+    const seed = mod(ty, lvl.height) * lvl.width + mod(tx, lvl.width);
+    const sideways = (dx: number) => {
+      const n = tileAt(lvl, tx + dx, ty);
+      return n === Tile.ForceField || isSolid(n);
+    };
+    const horizontal = t === Tile.ForceField ? sideways(-1) || sideways(1) : undefined;
+    const glow = drawTileOverlay(this.ctx, t, px, py, s, { now, fieldOn, seed, horizontal });
+    if (glow) this.lights.push({ x: px + s / 2, y: py + s / 2, r: s * glow.r, color: glow.color, gr: s * glow.r * 0.5, ga: glow.a });
   }
 
   /** A swirling portal. */
@@ -506,7 +528,7 @@ export class Renderer {
       const sw = tile * (0.62 - bob / tile);
       ctx.drawImage(blob, px - sw / 2, py + tile * 0.22 - sw * 0.17, sw, sw * 0.34);
       list.push({ y: cy, draw: () => this.drawItem(it.kind, px, py - tile * 0.05 + bob) });
-      if (it.kind === 'potion' || it.kind === 'treasure' || it.kind === 'key') {
+      if (it.kind !== 'food' && it.kind !== 'cider') {
         this.lights.push({ x: px, y: py, r: tile * 1.2, color: ITEM_GLOW[it.kind], gr: tile * 0.55, ga: 0.18 + 0.1 * Math.sin(now * 3 + key) });
       }
     }
@@ -526,8 +548,8 @@ export class Renderer {
       if (!this.visible(game, p.x, p.y)) continue;
       const px = this.sx(game, p.x);
       const py = this.sy(game, p.y);
-      const ghostly = m.kind === 'ghost' || (m.kind === 'sorcerer' && m.invisible > 0);
-      const sw = tile * (0.6 + 0.06 * m.rank);
+      const ghostly = m.kind === 'ghost' || m.invisible > 0 || m.kind === 'acid';
+      const sw = tile * (0.6 + 0.06 * m.rank) * ((m.def.radius ?? 0.38) / 0.38);
       ctx.globalAlpha = ghostly ? 0.4 : 1;
       ctx.drawImage(blob, px - sw / 2, py + tile * 0.3 - sw * 0.17, sw, sw * 0.34);
       ctx.globalAlpha = 1;
@@ -540,7 +562,16 @@ export class Renderer {
       const px = this.sx(game, p.x);
       const py = this.sy(game, p.y);
       this.lights.push({ x: px, y: py, r: tile * HERO_LIGHT, color: '#fff2dc', gr: 0, ga: 0 });
-      list.push({ y: p.y, draw: () => this.drawHero(game, pl, px, py, now) });
+      list.push({
+        y: p.y,
+        draw: () => {
+          ctx.save();
+          if (pl.amulet === 'invisibility') ctx.globalAlpha = 0.35;
+          this.drawHero(game, pl, px, py, now);
+          ctx.restore();
+          this.drawHeroEffects(pl, px, py, now);
+        },
+      });
     }
 
     list.sort((a, b) => a.y - b.y);
@@ -591,6 +622,31 @@ export class Renderer {
         ctx.fillRect(px - r, py - r * 0.15, r * 2, r * 0.25);
         ctx.fillRect(px - r * 0.15, py - r * 0.6, r * 0.3, r * 1.3);
         break;
+      case 'amulet':
+        ctx.strokeStyle = '#f0d060';
+        ctx.lineWidth = Math.max(2, tile / 12);
+        ctx.beginPath();
+        ctx.arc(px, py - r * 0.75, r * 0.45, 0, Math.PI * 2);
+        ctx.stroke();
+        this.circle(px, py + r * 0.15, r * 0.5, '#e8c040');
+        this.circle(px, py + r * 0.15, r * 0.25, '#40c0f0');
+        break;
+      case 'poison':
+        this.circle(px, py + r * 0.2, r * 0.7, '#40a020');
+        ctx.fillStyle = '#c0f0a0';
+        ctx.fillRect(px - r * 0.2, py - r * 0.9, r * 0.4, r * 0.6);
+        this.circle(px, py + r * 0.15, r * 0.25, '#f0f0e0');
+        break;
+      case 'it': {
+        const g = this.ctx.createRadialGradient(px - r * 0.3, py - r * 0.3, r * 0.1, px, py, r);
+        g.addColorStop(0, '#ffffff');
+        g.addColorStop(1, '#9090c0');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(px, py, r * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
     }
   }
 
@@ -619,13 +675,21 @@ export class Renderer {
 
   private drawMonster(game: GameView, m: Monster, px: number, py: number, now: number): void {
     const { ctx, tile } = this;
-    const r = tile * (0.28 + 0.04 * m.rank);
+    const scale = (m.def.radius ?? 0.38) / 0.38;
+    const r = tile * (0.28 + 0.04 * m.rank) * scale;
     const seed = this.seed(m);
     ctx.save();
-    if (m.kind === 'sorcerer' && m.invisible > 0) ctx.globalAlpha = 0.2;
+    if (m.invisible > 0) ctx.globalAlpha = 0.2;
+    if (m.stunned > 0) {
+      for (let k = 0; k < 3; k++) {
+        const a = now * 5 + (k * Math.PI * 2) / 3;
+        this.star(px + Math.cos(a) * r, py - r * 1.3 + Math.sin(a) * r * 0.3, tile * 0.08, '#ffe860');
+      }
+    }
+    if (m.kind === 'dragon') this.lights.push({ x: px, y: py, r: tile * 2.5, color: '#ff8030', gr: tile * 1.2, ga: 0.15 });
     const img = this.sprites.get(m.kind);
     if (img) {
-      const size = tile * (0.95 + 0.1 * m.rank);
+      const size = tile * (0.95 + 0.1 * m.rank) * scale;
       let lift = 0;
       let sy = 1;
       if (m.kind === 'ghost') {
@@ -691,6 +755,49 @@ export class Renderer {
       case 'lobber':
         this.circle(px, py, r * 0.75, color);
         break;
+      case 'supersorcerer':
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(px, py - r * 1.4);
+        ctx.lineTo(px + r, py + r);
+        ctx.lineTo(px - r, py + r);
+        ctx.closePath();
+        ctx.fill();
+        this.star(px, py - r * 1.4, r * 0.35, '#fff0a0');
+        break;
+      case 'dragon': {
+        // Body, neck and head, with a fiery maw.
+        this.circle(px, py + r * 0.2, r, color);
+        this.circle(px + r * 0.15, py + r * 0.45, r * 0.7, '#2a7030');
+        this.circle(px - r * 0.55, py - r * 0.65, r * 0.42, color);
+        ctx.fillStyle = '#c8e8a0';
+        for (let k = 0; k < 4; k++) {
+          ctx.beginPath();
+          ctx.moveTo(px - r * 0.2 + k * r * 0.35, py - r * 0.75);
+          ctx.lineTo(px - r * 0.05 + k * r * 0.35, py - r * 1.05);
+          ctx.lineTo(px + r * 0.1 + k * r * 0.35, py - r * 0.75);
+          ctx.fill();
+        }
+        this.circle(px - r * 0.75, py - r * 0.55, r * 0.14, '#ff6010');
+        break;
+      }
+      case 'thief':
+        this.circle(px, py, r * 0.85, '#4a3a30');
+        ctx.fillStyle = '#1a1410';
+        ctx.fillRect(px - r * 0.8, py - r * 0.45, r * 1.6, r * 0.35);
+        if (m.loot) this.circle(px + r * 0.8, py + r * 0.4, r * 0.4, '#d0a040');
+        break;
+      case 'acid': {
+        const wob = Math.sin(now * 3 + seed) * r * 0.12;
+        ctx.fillStyle = 'rgba(140,230,40,0.85)';
+        ctx.beginPath();
+        ctx.ellipse(px, py + r * 0.3, r * 1.2 + wob, r * 0.7 - wob * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        this.circle(px - r * 0.4, py + r * 0.1, r * 0.18, 'rgba(230,255,180,0.9)');
+        this.circle(px + r * 0.3, py + r * 0.45, r * 0.12, 'rgba(230,255,180,0.9)');
+        ctx.restore();
+        return;
+      }
       default:
         ctx.fillStyle = color;
         ctx.fillRect(px - r, py - r, r * 2, r * 2);
@@ -756,6 +863,50 @@ export class Renderer {
     ctx.fillText(p.def.title[0], px, py + 1);
   }
 
+  /** Gauntlet II states on a hero: the It ball, amulets, stun stars, poison. */
+  private drawHeroEffects(p: Player, px: number, py: number, now: number): void {
+    const { ctx, tile } = this;
+    const head = py - tile * 0.75;
+    if (p.it) {
+      const k = 0.5 + 0.5 * Math.sin(now * 6);
+      ctx.strokeStyle = `rgba(255,255,255,${0.5 + 0.4 * k})`;
+      ctx.lineWidth = Math.max(1.5, tile / 16);
+      ctx.beginPath();
+      ctx.arc(px, py, tile * (0.6 + 0.08 * k), 0, Math.PI * 2);
+      ctx.stroke();
+      this.lights.push({ x: px, y: py, r: tile * 2, color: '#ffffff', gr: tile * 0.9, ga: 0.3 * k });
+      this.drawTag('IT', '#ffffff', px, head - tile * 0.3);
+    }
+    if (p.amulet === 'invulnerability') {
+      ctx.strokeStyle = `rgba(255,220,100,${0.45 + 0.25 * Math.sin(now * 5)})`;
+      ctx.lineWidth = Math.max(2, tile / 12);
+      ctx.beginPath();
+      ctx.arc(px, py, tile * 0.62, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (p.amulet && p.amulet !== 'invisibility') {
+      const color = p.amulet === 'repulsive' ? '#a0ff60' : p.amulet === 'transport' ? '#c080ff' : '#80d0ff';
+      this.lights.push({ x: px, y: py, r: tile * 1.6, color, gr: tile * 0.8, ga: 0.25 + 0.1 * Math.sin(now * 4) });
+    }
+    if (p.stun > 0) {
+      for (let k = 0; k < 3; k++) {
+        const a = now * 5 + (k * Math.PI * 2) / 3;
+        this.star(px + Math.cos(a) * tile * 0.3, head + Math.sin(a) * tile * 0.1, tile * 0.09, '#ffe860');
+      }
+    }
+    if (p.dizzy > 0) {
+      ctx.strokeStyle = 'rgba(140,255,90,0.85)';
+      ctx.lineWidth = Math.max(1.5, tile / 18);
+      ctx.beginPath();
+      for (let k = 0; k <= 20; k++) {
+        const a = now * 4 + k * 0.6;
+        const rr = tile * 0.015 * k;
+        if (k === 0) ctx.moveTo(px + Math.cos(a) * rr, head + Math.sin(a) * rr * 0.5);
+        else ctx.lineTo(px + Math.cos(a) * rr, head + Math.sin(a) * rr * 0.5);
+      }
+      ctx.stroke();
+    }
+  }
+
   /** Small player label floating above a hero. */
   private drawTag(text: string, color: string, px: number, py: number): void {
     const { ctx, tile } = this;
@@ -794,8 +945,8 @@ export class Renderer {
     if (!this.visible(game, p.x, p.y)) return;
     const px = this.sx(game, p.x);
     const py = this.sy(game, p.y);
-    if (s.kind === 'arrow') {
-      const color = game.players[s.owner]?.def.color ?? '#ffffff';
+    if (s.kind === 'arrow' || s.kind === 'super') {
+      const color = s.kind === 'super' ? '#fff0a0' : (game.players[s.owner]?.def.color ?? '#ffffff');
       const len = Math.hypot(s.vx, s.vy) || 1;
       const ux = s.vx / len;
       const uy = s.vy / len;
@@ -803,9 +954,10 @@ export class Renderer {
       const grad = ctx.createLinearGradient(px - ux * tail, py - uy * tail, px, py);
       grad.addColorStop(0, rgba(color, 0));
       grad.addColorStop(1, rgba(color, 0.9));
+      const fat = s.kind === 'super' ? 2 : 1;
       ctx.lineCap = 'round';
       ctx.strokeStyle = grad;
-      ctx.lineWidth = Math.max(2, tile / 7);
+      ctx.lineWidth = Math.max(2, tile / 7) * fat;
       ctx.beginPath();
       ctx.moveTo(px - ux * tail, py - uy * tail);
       ctx.lineTo(px + ux * tile * 0.2, py + uy * tile * 0.2);
@@ -1212,7 +1364,20 @@ export class Renderer {
     };
     drawIcons('key', p.keys, '#f0d040');
     drawIcons('potion', p.potions, '#3a7ae0');
-    if (p.keys === 0 && p.potions === 0) {
+    // Gauntlet II states, right-aligned on the same line.
+    const status = [
+      p.it ? 'IT' : '',
+      p.amulet ? `${AMULET_NAMES[p.amulet]} ${Math.ceil(p.amuletTime)}${p.amulet === 'supershot' ? '' : 's'}` : '',
+      p.stun > 0 ? 'Stunned' : '',
+      p.dizzy > 0 ? 'Poisoned' : '',
+    ].filter(Boolean).join(' · ');
+    if (status) {
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 11px ${UI_FONT}`;
+      ctx.fillStyle = p.dizzy > 0 ? '#a0ff70' : '#ffe8a0';
+      ctx.fillText(this.ellipsize(status, x + w - 12 - ix), x + w - 12, iy);
+    } else if (p.keys === 0 && p.potions === 0) {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.font = `400 11px ${UI_FONT}`;

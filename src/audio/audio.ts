@@ -15,6 +15,14 @@ const SOUNDS: Record<Sfx, Tone> = {
   die: { freq: 400, to: 40, dur: 0.9, type: 'sawtooth', vol: 0.1 },
   magic: { freq: 60, to: 30, dur: 0.6, type: 'sawtooth', vol: 0.15 },
   join: { freq: 523, to: 784, dur: 0.3, type: 'square', vol: 0.06 },
+  stun: { freq: 900, to: 300, dur: 0.35, type: 'triangle', vol: 0.08 },
+  teleport: { freq: 200, to: 1600, dur: 0.3, type: 'sine', vol: 0.1 },
+  trap: { freq: 90, to: 45, dur: 0.5, type: 'square', vol: 0.08 },
+  break: { freq: 160, to: 50, dur: 0.18, type: 'sawtooth', vol: 0.07 },
+  steal: { freq: 700, to: 350, dur: 0.25, type: 'square', vol: 0.06 },
+  amulet: { freq: 660, to: 1760, dur: 0.4, type: 'sine', vol: 0.1 },
+  zap: { freq: 1200, to: 900, dur: 0.05, type: 'sawtooth', vol: 0.03 },
+  roar: { freq: 80, to: 50, dur: 0.5, type: 'sawtooth', vol: 0.12 },
 };
 
 /** Synthesised sound effects plus speech-synthesis announcements ("Elf needs food, badly!"). */

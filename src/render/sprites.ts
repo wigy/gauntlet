@@ -9,6 +9,8 @@ export const SPRITE_NAMES = [
   'ghost', 'grunt', 'demon', 'lobber', 'sorcerer', 'death',
   'food', 'cider', 'potion', 'key', 'treasure-gold', 'generator',
   'wall-orange', 'wall-teal', 'floor', 'door',
+  // Gauntlet II
+  'supersorcerer', 'dragon', 'thief', 'acid', 'amulet', 'poison', 'it',
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];

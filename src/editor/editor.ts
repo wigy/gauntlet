@@ -1,6 +1,7 @@
 import { MONSTERS } from '../core/defs';
 import type { MonsterKind } from '../core/defs';
 import { LEGEND, MAX_LEVEL_SIZE, Tile, bfsDistances, parseLevel } from '../core/level';
+import { drawTileOverlay } from '../render/tiles';
 import type { LevelSetId, LevelSetInfo } from '../net/protocol';
 import { Sprites } from '../render/sprites';
 import { confirmDialog } from '../ui/dialog';
@@ -27,6 +28,10 @@ interface Doc {
   name: string;
   wrap: Wrap;
   rank: number;
+  /** Gauntlet II: a thief turns up every so often. */
+  thief: boolean;
+  /** Kept as it was loaded (g2 = the level came from the Gauntlet II set). */
+  style: 'g1' | 'g2';
   grid: string[][];
 }
 
@@ -35,8 +40,10 @@ interface ToolDef {
   label: string;
 }
 
-const { ITEM_CHARS, GENERATOR_CHARS, MONSTER_CHARS } = LEGEND;
-const ITEM_SPRITES: Record<string, SpriteName> = { F: 'food', C: 'cider', P: 'potion', K: 'key', T: 'treasure-gold' };
+const { TILE_CHARS, ITEM_CHARS, GENERATOR_CHARS, MONSTER_CHARS } = LEGEND;
+const ITEM_SPRITES: Record<string, SpriteName> = { F: 'food', C: 'cider', P: 'potion', K: 'key', T: 'treasure-gold', A: 'amulet', B: 'poison', I: 'it' };
+/** Gauntlet II tiles that are drawn as walls with something on top. */
+const WALL_CHARS = new Set(['#', '%', '*']);
 const title = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 const GROUPS: { label: string; tools: ToolDef[] }[] = [
@@ -48,6 +55,17 @@ const GROUPS: { label: string; tools: ToolDef[] }[] = [
       { ch: 'D', label: 'Door (opened with a key)' },
       { ch: 'E', label: 'Exit' },
       { ch: 'S', label: 'Start (heroes appear here)' },
+    ],
+  },
+  {
+    label: 'Gauntlet II',
+    tools: [
+      { ch: '*', label: 'Breakable wall (3 shots)' },
+      { ch: '^', label: 'Trap (removes all trap walls)' },
+      { ch: '%', label: 'Trap wall' },
+      { ch: '~', label: 'Stun tile (hidden in play)' },
+      { ch: '@', label: 'Transporter (to the nearest other one)' },
+      { ch: '=', label: 'Force field (on and off)' },
     ],
   },
   { label: 'Items', tools: Object.entries(ITEM_CHARS).map(([ch, kind]) => ({ ch, label: title(kind) })) },
@@ -66,12 +84,13 @@ function blankDoc(w = 32, h = 24): Doc {
   const grid: string[][] = Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => (x === 0 || y === 0 || x === w - 1 || y === h - 1 ? '#' : '.')));
   grid[2][2] = 'S';
   grid[h - 3][w - 3] = 'E';
-  return { id: null, name: 'New level', wrap: 'none', rank: 2, grid };
+  return { id: null, name: 'New level', wrap: 'none', rank: 2, thief: false, style: 'g1', grid };
 }
 
 function docToText(doc: Doc): string {
   const name = doc.name.replace(/[\r\n]+/g, ' ').trim() || 'Untitled';
-  return `name: ${name}\nwrap: ${doc.wrap}\nrank: ${doc.rank}\n---\n${doc.grid.map((r) => r.join('')).join('\n')}\n`;
+  const extra = (doc.style === 'g2' ? 'style: g2\n' : '') + (doc.thief ? 'thief: yes\n' : '');
+  return `name: ${name}\nwrap: ${doc.wrap}\nrank: ${doc.rank}\n${extra}---\n${doc.grid.map((r) => r.join('')).join('\n')}\n`;
 }
 
 function textToDoc(text: string, id: string | null): Doc {
@@ -87,7 +106,8 @@ function textToDoc(text: string, id: string | null): Doc {
   const grid = rows.map((r) => Array.from({ length: w }, (_, x) => (r[x] === ' ' ? '.' : (r[x] ?? '#'))));
   const wrap = (['none', 'x', 'y', 'both'] as const).find((v) => v === meta.wrap) ?? 'none';
   const rank = Math.max(1, Math.min(3, Number(meta.rank) || 3));
-  return { id, name: meta.name ?? 'Untitled', wrap, rank, grid: grid.length ? grid : blankDoc().grid };
+  const style = meta.style === 'g2' ? 'g2' : 'g1';
+  return { id, name: meta.name ?? 'Untitled', wrap, rank, thief: meta.thief === 'yes', style, grid: grid.length ? grid : blankDoc().grid };
 }
 
 /**
@@ -490,10 +510,16 @@ export class Editor {
       if (img) ctx.drawImage(img, px + (s - size) / 2 + ox * s, py + (s - size) / 2 + oy * s, size, size);
       return !!img;
     };
-    if (ch === '#') {
+    const look = { now: performance.now() / 1000, fieldOn: true, seed: 0, reveal: true };
+    if (WALL_CHARS.has(ch)) {
       if (!sprite('wall-orange', 1)) {
         ctx.fillStyle = '#b0602a';
         ctx.fillRect(px, py, s, s);
+      }
+      if (ch !== '#') {
+        drawTileOverlay(ctx, TILE_CHARS[ch], px, py, s, look);
+        // Trap walls only shimmer in play; mark them plainly here.
+        if (ch === '%') this.label(ctx, '%', px + s / 2, py + s / 2, s, '#e0c8ff');
       }
       return;
     }
@@ -521,6 +547,8 @@ export class Editor {
       ctx.arc(cx, cy, s * 0.42, 0, Math.PI * 2);
       ctx.fill();
       this.label(ctx, 'EXIT', cx, cy, s, '#d8f6ff');
+    } else if (TILE_CHARS[ch] >= Tile.Trap) {
+      drawTileOverlay(ctx, TILE_CHARS[ch], px, py, s, look);
     } else if (ch === 'S') {
       ctx.strokeStyle = '#ffd877';
       ctx.lineWidth = Math.max(1.5, s * 0.08);
@@ -582,6 +610,9 @@ export class Editor {
         <label class="ed-field" title="Strength of monsters and generators (1-3)">Rank
           <select data-field="rank"><option>1</option><option>2</option><option>3</option></select>
         </label>
+        <label class="ed-field" title="A thief turns up every so often to steal potions, keys or points">Thieves
+          <select data-field="thief"><option value="no">No</option><option value="yes">Yes</option></select>
+        </label>
         <label class="ed-field">Size
           <input type="number" data-field="w" min="4" max="${MAX_LEVEL_SIZE}" /> ×
           <input type="number" data-field="h" min="4" max="${MAX_LEVEL_SIZE}" />
@@ -634,6 +665,7 @@ export class Editor {
     if (document.activeElement !== name) name.value = this.doc.name;
     this.field<HTMLSelectElement>('wrap').value = this.doc.wrap;
     this.field<HTMLSelectElement>('rank').value = String(this.doc.rank);
+    this.field<HTMLSelectElement>('thief').value = this.doc.thief ? 'yes' : 'no';
     for (const [f, v] of [['w', this.width], ['h', this.height]] as const) {
       const el = this.field(f);
       if (document.activeElement !== el) el.value = String(v);
@@ -763,9 +795,10 @@ export class Editor {
     root.addEventListener('change', (e) => {
       const el = e.target as HTMLInputElement;
       const f = el.dataset.field;
-      if (f === 'wrap' || f === 'rank') {
+      if (f === 'wrap' || f === 'rank' || f === 'thief') {
         this.checkpoint();
         if (f === 'wrap') this.doc.wrap = el.value as Wrap;
+        else if (f === 'thief') this.doc.thief = el.value === 'yes';
         else this.doc.rank = Number(el.value);
         this.changed();
       } else if (f === 'w' || f === 'h') {

@@ -2,5 +2,6 @@ node_modules/
 dist/
 # Maps converted from VGMaps rips of Atari's Gauntlet (copyrighted) - regenerate with `npm run import:g1`
 public/levels/gauntlet1/
+public/levels/gauntlet2/
 .import-cache/
 

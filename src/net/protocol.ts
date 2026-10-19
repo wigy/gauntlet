@@ -4,8 +4,8 @@
  * The server is authoritative: it runs src/core/Game for every game in progress and sends each client a snapshot of
  * what's around its hero ~30 times a second. Clients only send their controller state.
  */
-import type { GameEvent, GameState } from '../core/game';
-import type { HeroClass, ItemKind, MonsterKind } from '../core/defs';
+import type { GameEvent, GameState, Shot } from '../core/game';
+import type { AmuletKind, HeroClass, ItemKind, MonsterKind } from '../core/defs';
 
 export const WS_PATH = '/ws';
 export const MAX_NAME_LENGTH = 16;
@@ -34,7 +34,7 @@ export type ClientMessage =
   | { t: 'levelDelete'; id: string }
   | { t: 'levelMove'; id: string; delta: -1 | 1 };
 
-export type LevelSetId = 'arcade' | 'builtin' | 'custom';
+export type LevelSetId = 'arcade' | 'arcade2' | 'builtin' | 'custom';
 
 export interface LevelSetSummary {
   id: LevelSetId;
@@ -86,14 +86,17 @@ export interface LevelInfo {
   tiles: string;
 }
 
-/** [slot, controller, name, hero, x, y, fx, fy, health, score, keys, potions, alive] */
-export type PlayerRow = [number, string, string, HeroClass, number, number, number, number, number, number, number, number, 0 | 1];
-/** [id, kind, rank, hp (-1 = immortal), x, y, fx, invisible 0/1] */
-export type MonsterRow = [number, MonsterKind, number, number, number, number, number, 0 | 1];
+/** [slot, controller, name, hero, x, y, fx, fy, health, score, keys, potions, alive, stunned, dizzy, amulet, amulet seconds, it] */
+export type PlayerRow = [
+  number, string, string, HeroClass, number, number, number, number, number, number, number, number, 0 | 1,
+  0 | 1, 0 | 1, AmuletKind | '', number, 0 | 1,
+];
+/** [id, kind, rank, hp (-1 = immortal), x, y, fx, invisible 0/1, stunned 0/1] */
+export type MonsterRow = [number, MonsterKind, number, number, number, number, number, 0 | 1, 0 | 1];
 /** [id, kind, hp, x, y] */
 export type GeneratorRow = [number, MonsterKind, number, number, number];
 /** [id, kind, owner, x, y, vx, vy, ttl] */
-export type ShotRow = [number, 'arrow' | 'fireball' | 'rock', number, number, number, number, number, number];
+export type ShotRow = [number, Shot['kind'], number, number, number, number, number, number];
 /** [tile index, kind] */
 export type ItemRow = [number, ItemKind];
 
@@ -102,6 +105,8 @@ export interface Snapshot {
   state: GameState;
   /** Our own controller id, so the client knows which hero is "me". */
   you: string;
+  /** Game time in seconds (force fields switch on and off with it). */
+  time: number;
   players: PlayerRow[];
   monsters: MonsterRow[];
   generators: GeneratorRow[];

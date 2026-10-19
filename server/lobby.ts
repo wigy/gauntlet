@@ -382,7 +382,7 @@ export class Lobby {
           level: { number: game.levelNumber, name: lvl.name, width: lvl.width, height: lvl.height, wrapX: lvl.wrapX, wrapY: lvl.wrapY, tiles: Array.from(lvl.tiles).join('') },
         });
       }
-      const snap: Snapshot = { t: 'state', state: game.state, you: client.id, players: [], monsters: [], generators: [], shots: [], events };
+      const snap: Snapshot = { t: 'state', state: game.state, you: client.id, time: r3(game.time), players: [], monsters: [], generators: [], shots: [], events };
       if (tiles) snap.tiles = tiles;
       if (client.itemsSent !== room.itemsVersion) {
         client.itemsSent = room.itemsVersion;
@@ -397,11 +397,14 @@ export class Lobby {
 
       for (const p of game.players) {
         if (!p) continue;
-        snap.players.push([p.slot, p.controller, p.name, p.hero, r3(p.x), r3(p.y), p.fx, p.fy, Math.ceil(p.health), p.score, p.keys, p.potions, p.alive ? 1 : 0]);
+        snap.players.push([
+          p.slot, p.controller, p.name, p.hero, r3(p.x), r3(p.y), p.fx, p.fy, Math.ceil(p.health), p.score, p.keys, p.potions, p.alive ? 1 : 0,
+          p.stun > 0 ? 1 : 0, p.dizzy > 0 ? 1 : 0, p.amulet ?? '', Math.ceil(p.amuletTime), p.it ? 1 : 0,
+        ]);
       }
       for (const m of game.monsters) {
         if (!near(m.x, m.y)) continue;
-        snap.monsters.push([this.idOf(room, m), m.kind, m.rank, Number.isFinite(m.hp) ? r3(m.hp) : -1, r3(m.x), r3(m.y), m.fx, m.invisible > 0 ? 1 : 0]);
+        snap.monsters.push([this.idOf(room, m), m.kind, m.rank, Number.isFinite(m.hp) ? r3(m.hp) : -1, r3(m.x), r3(m.y), m.fx, m.invisible > 0 ? 1 : 0, m.stunned > 0 ? 1 : 0]);
       }
       for (const g of game.generators) {
         if (near(g.x, g.y)) snap.generators.push([this.idOf(room, g), g.kind, r3(g.hp), g.x, g.y]);

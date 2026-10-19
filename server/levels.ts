@@ -5,7 +5,7 @@ import { MAX_LEVEL_SIZE, isEmptyLevel, levelToText, parseLevel, populate } from 
 import { BUILTIN_LEVELS } from '../src/levels/builtin';
 import type { LevelSetId, LevelSetInfo, LevelSetSummary } from '../src/net/protocol';
 
-const LABELS: Record<LevelSetId, string> = { arcade: 'Arcade levels', builtin: 'Built-in levels', custom: 'My levels' };
+const LABELS: Record<LevelSetId, string> = { arcade: 'Arcade levels', arcade2: 'Gauntlet II levels', builtin: 'Built-in levels', custom: 'My levels' };
 const MAX_LEVEL_TEXT = 40_000;
 const MAX_NAME = 40;
 
@@ -14,8 +14,10 @@ export interface LevelLibraryOptions {
   customDir: string | null;
   /** Imported arcade levels (public/levels/gauntlet1); null or missing = no arcade set. */
   arcadeDir?: string | null;
+  /** Imported Gauntlet II levels (public/levels/gauntlet2); null or missing = no such set. */
+  arcade2Dir?: string | null;
   builtin?: readonly string[];
-  /** Set used when a game doesn't ask for one (LEVELS env: builtin / arcade). */
+  /** Set used when a game doesn't ask for one (LEVELS env: builtin / arcade / arcade2 / custom). */
   preferred?: string;
 }
 
@@ -33,6 +35,7 @@ interface CustomLevel {
 export class LevelLibrary {
   private builtin: string[];
   private arcade: string[] = [];
+  private arcade2: string[] = [];
   private custom = new Map<string, CustomLevel[]>();
   private preferred: string;
 
@@ -40,12 +43,14 @@ export class LevelLibrary {
     this.builtin = [...(options.builtin ?? BUILTIN_LEVELS)];
     this.preferred = options.preferred ?? 'arcade';
     if (options.arcadeDir) this.arcade = this.readSet(options.arcadeDir);
+    if (options.arcade2Dir) this.arcade2 = this.readSet(options.arcade2Dir);
   }
 
   /** Default set for new games. */
   defaultSet(owner: string | null): LevelSetId {
     if (this.preferred === 'builtin') return 'builtin';
     if (this.preferred === 'custom' && this.texts('custom', owner).length) return 'custom';
+    if (this.preferred === 'arcade2' && this.arcade2.length) return 'arcade2';
     return this.arcade.length ? 'arcade' : 'builtin';
   }
 
@@ -63,7 +68,7 @@ export class LevelLibrary {
   }
 
   isSet(id: unknown): id is LevelSetId {
-    return id === 'arcade' || id === 'builtin' || id === 'custom';
+    return id === 'arcade' || id === 'arcade2' || id === 'builtin' || id === 'custom';
   }
 
   label(id: LevelSetId): string {
@@ -73,7 +78,7 @@ export class LevelLibrary {
   /** Level texts of a set (custom: the owner's), in play order. A snapshot: later edits don't affect running games. */
   texts(set: LevelSetId, owner: string | null): string[] {
     if (set === 'custom') return this.mine(owner).map((c) => c.text);
-    return set === 'arcade' ? [...this.arcade] : [...this.builtin];
+    return set === 'arcade' ? [...this.arcade] : set === 'arcade2' ? [...this.arcade2] : [...this.builtin];
   }
 
   /**
@@ -139,7 +144,10 @@ export class LevelLibrary {
   // ---------------------------------------------------------------- files
 
   private ids(): LevelSetId[] {
-    return this.arcade.length ? ['arcade', 'builtin', 'custom'] : ['builtin', 'custom'];
+    const sets: LevelSetId[] = [];
+    if (this.arcade.length) sets.push('arcade');
+    if (this.arcade2.length) sets.push('arcade2');
+    return [...sets, 'builtin', 'custom'];
   }
 
   private readSet(dir: string): string[] {
