@@ -3,6 +3,7 @@ import type { MonsterKind } from '../core/defs';
 import { LEGEND, MAX_LEVEL_SIZE, Tile, bfsDistances, parseLevel } from '../core/level';
 import type { LevelSetId, LevelSetInfo } from '../net/protocol';
 import { Sprites } from '../render/sprites';
+import { confirmDialog } from '../ui/dialog';
 import type { SpriteName } from '../render/sprites';
 import './editor.css';
 
@@ -212,8 +213,15 @@ export class Editor {
     this.renderAll();
   }
 
-  private confirmDiscard(): boolean {
-    return !this.dirty || confirm('Discard unsaved changes to this level?');
+  private async confirmDiscard(): Promise<boolean> {
+    if (!this.dirty) return true;
+    return confirmDialog({
+      title: 'Discard unsaved changes?',
+      message: `“${this.doc.name.trim() || 'Untitled'}” has changes that haven’t been saved.`,
+      confirm: 'Discard',
+      cancel: 'Keep editing',
+      danger: true,
+    });
   }
 
   private checkpoint(): void {
@@ -743,7 +751,7 @@ export class Editor {
         return;
       }
       const act = t.closest<HTMLButtonElement>('[data-act]');
-      if (act && !act.disabled) this.act(act.dataset.act!, act.dataset.id);
+      if (act && !act.disabled) void this.act(act.dataset.act!, act.dataset.id);
     });
     root.addEventListener('change', (e) => {
       const el = e.target as HTMLInputElement;
@@ -895,10 +903,10 @@ export class Editor {
     });
   }
 
-  private act(action: string, id: string | undefined): void {
+  private async act(action: string, id: string | undefined): Promise<void> {
     switch (action) {
       case 'close':
-        if (this.confirmDiscard()) {
+        if (await this.confirmDiscard()) {
           this.hide();
           this.actions.close();
         }
@@ -916,19 +924,19 @@ export class Editor {
       case 'resize':
         return this.resizeLevel(Number(this.field('w').value), Number(this.field('h').value));
       case 'new':
-        if (this.confirmDiscard()) this.setDoc(blankDoc(), true);
+        if (await this.confirmDiscard()) this.setDoc(blankDoc(), true);
         return;
       case 'copy': {
         const value = this.root.querySelector<HTMLSelectElement>('.ed-copy')!.value;
         const [set, levelId] = value.split(':') as [LevelSetId, string];
-        if (!levelId || !this.confirmDiscard()) return;
+        if (!levelId || !(await this.confirmDiscard())) return;
         const name = this.sets.find((s) => s.id === set)?.levels.find((l) => l.id === levelId)?.name ?? 'Level';
         this.pendingCopyName = `Copy of ${name}`;
         this.actions.load(set, levelId);
         return;
       }
       case 'open':
-        if (id && id !== this.doc.id && this.confirmDiscard()) this.actions.load('custom', id);
+        if (id && id !== this.doc.id && (await this.confirmDiscard())) this.actions.load('custom', id);
         return;
       case 'up':
       case 'down':
@@ -936,7 +944,14 @@ export class Editor {
         return;
       case 'delete': {
         const name = this.customLevels().find((l) => l.id === id)?.name ?? 'this level';
-        if (!id || !confirm(`Delete “${name}”? This can’t be undone.`)) return;
+        if (!id) return;
+        const yes = await confirmDialog({
+          title: `Delete “${name}”?`,
+          message: 'It’s removed from the Custom levels for everyone, and this can’t be undone.',
+          confirm: 'Delete level',
+          danger: true,
+        });
+        if (!yes) return;
         this.actions.remove(id);
         if (id === this.doc.id) {
           // Keep what's on screen as an unsaved level.
