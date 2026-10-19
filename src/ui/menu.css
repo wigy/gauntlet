@@ -404,6 +404,42 @@ button.slot:active {
   to { transform: rotate(360deg); }
 }
 
+.test-exit {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px 9px 12px;
+  font: 700 14px 'Inter', system-ui, sans-serif;
+  color: #ffe2a0;
+  background: rgba(12, 8, 20, 0.78);
+  border: 1px solid rgba(240, 190, 90, 0.55);
+  border-radius: 99px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.08s;
+}
+
+.test-exit.show {
+  display: inline-flex;
+}
+
+.test-exit:hover {
+  background: rgba(40, 28, 10, 0.9);
+}
+
+.test-exit:active {
+  transform: translateY(1px);
+}
+
+.test-exit span {
+  font-size: 16px;
+}
+
 .ui-toast {
   position: fixed;
   left: 50%;

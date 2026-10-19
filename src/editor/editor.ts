@@ -91,7 +91,7 @@ function textToDoc(text: string, id: string | null): Doc {
 }
 
 /**
- * Full-screen level editor: a list of custom levels (plus copies of built-in and arcade ones), a palette of
+ * Full-screen level editor: a list of the player's own levels (plus copies of built-in and arcade ones), a palette of
  * everything in the level legend, and a zoomable, pannable map to paint on. Saves go to the server as text.
  */
 export class Editor {
@@ -114,6 +114,8 @@ export class Editor {
   private spaceDown = false;
   private pendingCopyName: string | null = null;
   private testAfterSave = false;
+  /** Saved level to play-test as soon as it shows up in our level list. */
+  private testPending: string | null = null;
   private waitingSave = false;
   private needsDraw = true;
   private visible = false;
@@ -164,6 +166,10 @@ export class Editor {
     if (this.doc.id && !this.customLevels().some((l) => l.id === this.doc.id)) this.doc.id = null;
     this.renderSidebar();
     this.renderHeader();
+    if (this.testPending && this.customLevels().some((l) => l.id === this.testPending)) {
+      this.testPending = null;
+      this.startTest();
+    }
   }
 
   levelText(set: LevelSetId, id: string, text: string): void {
@@ -175,7 +181,7 @@ export class Editor {
     } else {
       this.setDoc(doc, false);
     }
-    this.toast(set === 'custom' ? `Opened “${doc.name}”` : 'Copied. Save it to add it to your custom levels.');
+    this.toast(set === 'custom' ? `Opened “${doc.name}”` : 'Copied. Save it to add it to your levels.');
   }
 
   saved(id: string): void {
@@ -188,7 +194,8 @@ export class Editor {
     this.toast('Saved');
     if (this.testAfterSave) {
       this.testAfterSave = false;
-      this.startTest();
+      if (this.customLevels().some((l) => l.id === id)) this.startTest();
+      else this.testPending = id;
     }
   }
 
@@ -587,8 +594,8 @@ export class Editor {
         <button class="ed-btn primary" data-act="test" title="Save and play this level">▶ Play test</button>
       </header>
       <aside class="ed-side">
-        <h3>Custom levels</h3>
-        <p class="ed-note">Played in this order when a game uses the Custom set.</p>
+        <h3>My levels</h3>
+        <p class="ed-note">Only you can edit these. Games you start with “My levels” play them in this order.</p>
         <ol class="ed-levels"></ol>
         <button class="ed-btn wide" data-act="new">+ New level</button>
         <h3>Start from a copy</h3>
@@ -947,7 +954,7 @@ export class Editor {
         if (!id) return;
         const yes = await confirmDialog({
           title: `Delete “${name}”?`,
-          message: 'It’s removed from the Custom levels for everyone, and this can’t be undone.',
+          message: 'It’s removed from your levels, and this can’t be undone.',
           confirm: 'Delete level',
           danger: true,
         });

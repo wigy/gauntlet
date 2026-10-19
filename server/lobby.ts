@@ -44,7 +44,9 @@ interface Room {
   members: Client[];
   game: Game | null;
   set: LevelSetId;
-  /** The set's level texts when the room was opened. */
+  /** Shown in the lobby, e.g. "Arcade" or "wigy's levels". */
+  setLabel: string;
+  /** The set's level texts when the room was opened (custom: the creator's levels). */
   levels: string[];
   startLevel: number;
   overAt: number;
@@ -102,7 +104,7 @@ export class Lobby {
         client.name = saved?.name ?? null;
         if (saved) this.store.touch(client.playerId);
         client.conn.send({ t: 'welcome', id: client.playerId, name: client.name });
-        if (client.name) client.conn.send(this.lobbyMessage());
+        if (client.name) client.conn.send(this.lobbyMessage(client));
         return;
       }
       case 'setName': {
@@ -114,23 +116,26 @@ export class Lobby {
         const p = client.room?.game?.players.find((pl) => pl?.controller === client.id);
         if (p) p.name = name;
         client.conn.send({ t: 'welcome', id: client.playerId, name });
-        client.conn.send(this.lobbyMessage());
+        client.conn.send(this.lobbyMessage(client));
         if (client.room) this.roomChanged(client.room);
         return;
       }
       case 'create': {
         if (!client.name) return;
-        let set = this.levels.isSet(msg.set) ? msg.set : this.levels.defaultSet;
-        let levels = this.levels.texts(set);
+        const owner = client.playerId;
+        let set = this.levels.isSet(msg.set) ? msg.set : this.levels.defaultSet(owner);
+        let levels = this.levels.texts(set, owner);
         if (!levels.length) {
-          if (msg.set) return client.conn.send({ t: 'error', message: `There are no ${this.levels.label(set).toLowerCase()} levels yet.` });
+          if (msg.set === 'custom') return client.conn.send({ t: 'error', message: 'You haven’t made any levels yet. Open the level editor to make one.' });
+          if (msg.set) return client.conn.send({ t: 'error', message: `There are no ${this.levels.label(set).toLowerCase()}.` });
           set = 'builtin';
-          levels = this.levels.texts(set);
+          levels = this.levels.texts(set, owner);
         }
         this.leaveRoom(client);
         const level = Number(msg.level);
         const room: Room = {
           id: this.roomId(), name: `${client.name}'s game`, state: 'waiting', members: [], game: null, set, levels,
+          setLabel: set === 'custom' ? `${client.name}'s levels` : this.levels.label(set),
           startLevel: Number.isInteger(level) ? Math.max(1, Math.min(levels.length, level)) : 1,
           overAt: 0, events: [], tiles: new Uint8Array(0), levelSeen: -1, itemsCount: -1, itemsVersion: 0, ids: new WeakMap(), nextId: 1,
         };
@@ -165,35 +170,36 @@ export class Lobby {
       case 'leave':
         this.leaveRoom(client);
         client.conn.send({ t: 'room', room: null });
-        client.conn.send(this.lobbyMessage());
+        client.conn.send(this.lobbyMessage(client));
         return;
       case 'levelList':
-        if (client.name) client.conn.send({ t: 'levelList', sets: this.levels.sets() });
+        if (client.name) client.conn.send({ t: 'levelList', sets: this.levels.sets(client.playerId) });
         return;
       case 'levelGet': {
         if (!client.name || !this.levels.isSet(msg.set)) return;
-        const text = this.levels.get(msg.set, String(msg.id));
+        const text = this.levels.get(msg.set, String(msg.id), client.playerId);
         if (text === null) return client.conn.send({ t: 'error', message: 'That level no longer exists.' });
         client.conn.send({ t: 'levelText', set: msg.set, id: String(msg.id), text });
         return;
       }
       case 'levelSave': {
-        if (!client.name) return;
-        const result = this.levels.save(typeof msg.id === 'string' ? msg.id : null, msg.text);
+        if (!client.name || !client.playerId) return;
+        const result = this.levels.save(client.playerId, typeof msg.id === 'string' ? msg.id : null, msg.text);
         if ('error' in result) return client.conn.send({ t: 'error', message: result.error });
+        // The updated list first, so the client already knows the level's position when it hears it was saved.
+        this.levelsChanged(client.playerId);
         client.conn.send({ t: 'levelSaved', id: result.id });
-        this.levelsChanged();
         return;
       }
       case 'levelDelete':
-        if (!client.name) return;
-        this.levels.remove(String(msg.id));
-        this.levelsChanged();
+        if (!client.name || !client.playerId) return;
+        this.levels.remove(client.playerId, String(msg.id));
+        this.levelsChanged(client.playerId);
         return;
       case 'levelMove':
-        if (!client.name) return;
-        this.levels.move(String(msg.id), Number(msg.delta));
-        this.levelsChanged();
+        if (!client.name || !client.playerId) return;
+        this.levels.move(client.playerId, String(msg.id), Number(msg.delta));
+        this.levelsChanged(client.playerId);
         return;
       case 'input': {
         const axis = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
@@ -249,11 +255,14 @@ export class Lobby {
     this.lobbyChanged();
   }
 
-  /** Custom levels changed: refresh everyone's level lists and the lobby's set counts. */
-  private levelsChanged(): void {
-    const sets = this.levels.sets();
-    for (const c of this.clients) if (c.name) c.conn.send({ t: 'levelList', sets });
-    this.lobbyChanged();
+  /** A player's levels changed: refresh their level list and set counts (in every tab they have open). */
+  private levelsChanged(owner: string): void {
+    const sets = this.levels.sets(owner);
+    for (const c of this.clients) {
+      if (c.playerId !== owner || !c.name) continue;
+      c.conn.send({ t: 'levelList', sets });
+      if (!c.room || c.room.state === 'waiting') c.conn.send(this.lobbyMessage(c));
+    }
   }
 
   private enterRoom(client: Client, room: Room): void {
@@ -301,14 +310,15 @@ export class Lobby {
   }
 
   private lobbyChanged(): void {
-    const msg = this.lobbyMessage();
+    const games = this.lobbyGames();
     for (const c of this.clients) {
-      if (c.name && (!c.room || c.room.state === 'waiting')) c.conn.send(msg);
+      if (c.name && (!c.room || c.room.state === 'waiting')) c.conn.send(this.lobbyMessage(c, games));
     }
   }
 
-  private lobbyMessage(): ServerMessage {
-    return { t: 'lobby', games: this.lobbyGames(), sets: this.levels.summary(), defaultSet: this.levels.defaultSet };
+  /** The lobby as one client sees it: "My levels" counts their own levels. */
+  private lobbyMessage(client: Client, games = this.lobbyGames()): ServerMessage {
+    return { t: 'lobby', games, sets: this.levels.summary(client.playerId), defaultSet: this.levels.defaultSet(client.playerId) };
   }
 
   lobbyGames(): LobbyGame[] {
@@ -320,7 +330,7 @@ export class Lobby {
         name: room.name,
         state: room.state,
         players: this.playerInfo(room),
-        set: this.levels.label(room.set),
+        set: room.setLabel,
         level: room.game?.levelNumber ?? 0,
         open: room.members.length < MAX_PLAYERS,
       });

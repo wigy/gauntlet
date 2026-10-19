@@ -121,7 +121,7 @@ export class Menu {
           <button class="link" data-action="change-name">change</button></div>
         <div class="new-game">
           <select class="set-select" aria-label="Levels to play">
-            ${this.sets.map((s) => `<option value="${s.id}" ${s.id === this.set ? 'selected' : ''} ${s.count ? '' : 'disabled'}>${esc(s.label)} levels (${s.count})</option>`).join('')}
+            ${this.sets.map((s) => `<option value="${s.id}" ${s.id === this.set ? 'selected' : ''} ${s.count ? '' : 'disabled'}>${esc(s.label)} (${s.count})</option>`).join('')}
           </select>
           <button class="btn primary" data-action="create">Start a new game</button>
         </div>

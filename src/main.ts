@@ -94,9 +94,19 @@ function main(): void {
     backdrop.viewH = mirror.viewH;
   };
 
+  // During a play test (a game started from the editor), a button to get straight back to the editor.
+  const testExit = document.createElement('button');
+  testExit.className = 'test-exit';
+  testExit.innerHTML = '<span aria-hidden="true">←</span> Back to editor';
+  testExit.title = 'Stop the play test';
+  testExit.addEventListener('mousedown', (e) => e.preventDefault()); // don't take keyboard focus from the game
+  testExit.addEventListener('click', () => conn.send({ t: 'leave' }));
+  document.body.append(testExit);
+
   /** Show whichever screen fits the current state: lobby, waiting room, pause menu or the game itself. */
   function updateScreens(): void {
     const playing = inGame();
+    testExit.classList.toggle('show', playing && editing && !paused);
     if (renderer.menu === playing) {
       renderer.menu = !playing;
       resize();
