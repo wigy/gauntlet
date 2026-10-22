@@ -9,10 +9,10 @@
  * (a 2x2 grid of square textures) as .png or .jpg in <sheet-dir>. Sprites are found as connected blobs of non-magenta pixels and named
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
  * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
- * HD copies for the 3D view go to public/sprites/hd/: sprites at HD_SIZE, textures (tiles, ceiling) at HD_TEXTURE.
+ * HD copies for the 3D view go to public/sprites/hd/: sprites at HD_SIZE, textures (tiles) at HD_TEXTURE.
  *
- * ceiling is one square texture (scaled to SIZE). tv is the first-person view's TV set on magenta with its screen
- * flat green: both become transparent (the renderer finds the screen as the hole in the middle), cropped to the set.
+ * tv is the first-person view's TV set on magenta with its screen flat green: both become transparent (the renderer
+ * finds the screen as the hole in the middle), cropped to the set.
  *
  * <sheet-dir>/walk/<name>.png|jpg are walk sheets: one character in a 5x3 grid, columns facing WALK_DIRS (the other
  * three directions are mirrors), rows the walk frames. They become <name>-<dir>-<frame>.png. All frames of a sheet
@@ -358,13 +358,6 @@ function main(): void {
     console.log(`walk/${name}: ${boxes.length} frames`);
   }
   keyColor = null;
-
-  const ceilingFile = findSheet(dir, 'ceiling');
-  if (ceilingFile) {
-    const png = readImage(ceilingFile);
-    emit('ceiling.png', (size) => resample(png, { x0: 0, y0: 0, x1: png.width, y1: png.height }, false, undefined, size), HD_TEXTURE);
-    console.log('ceiling: 1 texture');
-  }
 
   const tvFile = findSheet(dir, 'tv');
   if (tvFile) {

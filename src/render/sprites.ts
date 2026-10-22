@@ -12,7 +12,7 @@ export const SPRITE_NAMES = [
   // Gauntlet II
   'supersorcerer', 'dragon', 'thief', 'acid', 'amulet', 'poison', 'it',
   // First-person view
-  'ceiling', 'tv',
+  'tv',
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];

@@ -128,6 +128,33 @@ export function shadowBlob(): HTMLCanvasElement {
   return cv;
 }
 
+let rock: HTMLCanvasElement | undefined;
+
+/** A lumpy grey stone, lit from the upper left: lobbers' rocks in the 3D view. */
+export function rockImage(): HTMLCanvasElement {
+  if (rock) return rock;
+  const [cv, g] = canvas(64, 64);
+  // An irregular outline: a circle with a few bumps.
+  g.beginPath();
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const r = 26 + [3, -2, 4, -3, 1, 3, -4, 2, -1, 4, -2, 1][i % 12];
+    g.lineTo(32 + Math.cos(a) * r, 34 + Math.sin(a) * r * 0.85);
+  }
+  g.closePath();
+  const grad = g.createRadialGradient(22, 22, 4, 32, 34, 32);
+  grad.addColorStop(0, '#e0dcd4');
+  grad.addColorStop(0.6, '#8a857c');
+  grad.addColorStop(1, '#4a4640');
+  g.fillStyle = grad;
+  g.fill();
+  g.strokeStyle = 'rgba(30,28,26,0.8)';
+  g.lineWidth = 2;
+  g.stroke();
+  rock = cv;
+  return cv;
+}
+
 export interface EdgeShades {
   /** Shadow a wall casts onto the floor tile below it (darkest at the top edge). */
   top: HTMLCanvasElement;

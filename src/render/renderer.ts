@@ -4,7 +4,7 @@ import { Tile, isSolid, isWallLike, levelTitle, mod, tileAt } from '../core/leve
 import { forceFieldOn } from '../core/game';
 import type { Game, Generator, Monster, Player, Shot } from '../core/game';
 import { drawTileOverlay } from './tiles';
-import { Particles, edgeShades, glow, shadowBlob, vignette } from './fx';
+import { Particles, edgeShades, glow, rockImage, shadowBlob, vignette } from './fx';
 import { FirstPersonView } from './firstperson';
 import type { Billboard } from './firstperson';
 import { Sprites, isWalker, silhouette, walkDir } from './sprites';
@@ -33,6 +33,8 @@ const MINIMAP_TILE: Partial<Record<Tile, string>> = {
   [Tile.Stun]: '#c0c040',
   [Tile.Transporter]: '#e04040',
 };
+/** How high (in wall heights) a lobbed rock's arc peaks in the 3D view. */
+const ROCK_PEAK = 1.4;
 /** Walk frames in order: stride, stand, other stride, stand. */
 const WALK_CYCLE = [0, 1, 2, 1];
 
@@ -119,6 +121,8 @@ export class Renderer {
   private hp = new WeakMap<object, number>();
   private hitAt = new WeakMap<object, number>();
   private seeds = new WeakMap<object, number>();
+  /** Each shot's flight time when first seen, so the 3D view knows how far through its arc a rock is. */
+  private shotTtl = new WeakMap<Shot, number>();
   private tracks: PlayerTrack[] = [0, 1, 2, 3].map(() => ({ p: null, alive: false, health: 0, score: 0, pending: 0, pendingAt: 0 }));
 
   /** Menu backdrop: the maze fills the whole window, dimmed, with no HUD. */
@@ -1318,7 +1322,6 @@ export class Renderer {
           wall: (hd ? this.sprites.wall(game.levelNumber, true) : undefined) ?? this.sprites.wall(game.levelNumber),
           door: this.hdOr('door', hd) ?? this.sprites.get('door'),
           floor: this.hdOr('floor', hd) ?? this.sprites.get('floor'),
-          ceiling: this.hdOr('ceiling', hd) ?? this.sprites.get('ceiling'),
         },
         this.billboards(game, hero, p, this.tvAngle, now, hd),
         bw, bh, forceFieldOn(game.time),
@@ -1435,13 +1438,20 @@ export class Renderer {
       if (look) out.push({ dx, dy, img: look.img, flip: look.flip, size: 0.8, lift: 0, alpha: pl.amulet === 'invisibility' ? 0.35 : 1 });
     }
     for (const s of game.shots) {
+      if (!this.shotTtl.has(s)) this.shotTtl.set(s, s.ttl);
       const p = this.pos(game, s);
       const dx = game.dxw(eye.x, p.x);
       const dy = game.dyw(eye.y, p.y);
       if (!near(dx, dy)) continue;
-      const color = s.kind === 'fireball' ? '#ff7a20' : s.kind === 'rock' ? '#a8a49c' : s.kind === 'super' ? '#fff0a0' : (game.players[s.owner]?.def.color ?? '#ffffff');
+      const color = s.kind === 'fireball' ? '#ff7a20' : s.kind === 'super' ? '#fff0a0' : (game.players[s.owner]?.def.color ?? '#ffffff');
       const rock = s.kind === 'rock';
-      out.push({ dx, dy, img: glow(color), flip: false, size: rock ? 0.3 : 0.4, lift: rock ? 0.2 + Math.sin(Math.min(1, s.ttl) * Math.PI) * 0.4 : 0.25, alpha: 1, bright: !rock });
+      // Rocks are lobbed high over the walls: an arc over their whole flight, peaking well above wall height.
+      let lift = 0.25;
+      if (rock) {
+        const k = 1 - s.ttl / Math.max(0.01, this.shotTtl.get(s)!);
+        lift = 0.1 + Math.sin(Math.min(1, Math.max(0, k)) * Math.PI) * ROCK_PEAK;
+      }
+      out.push({ dx, dy, img: rock ? rockImage() : glow(color), flip: false, size: rock ? 0.3 : 0.4, lift, alpha: 1, bright: !rock });
     }
     return out;
   }

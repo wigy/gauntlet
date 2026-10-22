@@ -3,8 +3,10 @@ import type { LevelData } from '../core/level';
 
 /**
  * A small first-person view of the maze from one hero's eyes, raycast like Wolfenstein 3D into a low-resolution
- * buffer: textured walls, floor and ceiling, and everything else as billboards (sprites that always face the camera).
- * Walls are one tile high and the eye is half a tile above the floor. Coordinates are tiles, as in the game.
+ * buffer: textured walls and floor, and everything else as billboards (sprites that always face the camera). Walls are
+ * one tile high and the eye is half a tile above the floor. There's no roof, as in the arcade (lobbers throw rocks over
+ * the walls): above the walls is darkness, and a billboard behind a wall shows wherever it rises above it.
+ * Coordinates are tiles, as in the game.
  */
 
 /** Something drawn as a billboard. dx/dy are its offset from the eye (already wrapped). */
@@ -35,7 +37,6 @@ export interface Textures {
   wall?: CanvasImageSource;
   door?: CanvasImageSource;
   floor?: CanvasImageSource;
-  ceiling?: CanvasImageSource;
 }
 
 interface Texture {
@@ -85,7 +86,7 @@ export class FirstPersonView {
   private image: ImageData | null = null;
   private zbuf = new Float32Array(0);
   private out32 = new Uint32Array(0);
-  /** Per column, the rows the wall covers (floor and ceiling are only drawn outside them). */
+  /** Per column, the rows the wall covers (floor and darkness are only drawn outside them). */
   private wallTop = new Int32Array(0);
   private wallEnd = new Int32Array(0);
   private textures = new WeakMap<object, Texture>();
@@ -145,7 +146,6 @@ export class FirstPersonView {
     const wallTex = this.texture(tex.wall, '#8a5030');
     const doorTex = this.texture(tex.door, '#a07030');
     const floorTex = this.texture(tex.floor, '#302a3a');
-    const ceilTex = this.texture(tex.ceiling, '#1c1a20');
 
     const dirX = Math.cos(eye.angle);
     const dirY = Math.sin(eye.angle);
@@ -217,21 +217,28 @@ export class FirstPersonView {
       }
     }
 
-    // Floor and ceiling, a row at a time (every pixel on a row is the same distance away), skipping wall pixels.
+    // Above the walls: darkness, faintly lighter overhead than at the far horizon.
+    for (let y = 0; y < Math.min(h, horizon + 1); y++) {
+      const k = 1 - y / Math.max(1, horizon);
+      const dark = (0xff000000 | (Math.round(4 + 10 * k) << 16) | (Math.round(3 + 8 * k) << 8) | Math.round(4 + 9 * k)) >>> 0;
+      const row = y * w;
+      for (let x = 0; x < w; x++) if (y < wallTop[x] || y >= wallEnd[x]) out32[row + x] = dark;
+    }
+
+    // Floor, a row at a time (every pixel on a row is the same distance away), skipping wall pixels.
     const lx = dirX - planeX;
     const ly = dirY - planeY;
     const rx = dirX + planeX;
     const ry = dirY + planeY;
-    for (let y = 0; y < h; y++) {
-      const floor = y > horizon;
-      const p = Math.max(0.5, floor ? y - horizon : horizon - y);
+    for (let y = Math.max(0, horizon + 1); y < h; y++) {
+      const p = y - horizon;
       const dist = (0.5 * h) / p;
-      const light = shade(dist) * (floor ? 1 : 0.75);
+      const light = shade(dist);
       const stepX = (dist * (rx - lx)) / w;
       const stepY = (dist * (ry - ly)) / w;
       let fx = eye.x + dist * lx;
       let fy = eye.y + dist * ly;
-      const base = floor ? floorTex : ceilTex;
+      const base = floorTex;
       // Texels per pixel: across the row, or along it in depth (the next row is dist / p further), whichever is more.
       const t = mip(base, Math.max(Math.hypot(stepX, stepY), dist / p) * base.w);
       // The tile under the ray only changes now and then, so its tint is looked up per cell, not per pixel.
@@ -245,7 +252,7 @@ export class FirstPersonView {
         if (y >= wallTop[x] && y < wallEnd[x]) continue;
         const cx = Math.floor(fx);
         const cy = Math.floor(fy);
-        if (floor && (cx !== lastX || cy !== lastY)) {
+        if (cx !== lastX || cy !== lastY) {
           lastX = cx;
           lastY = cy;
           const tile = tileAt(level, cx, cy);
@@ -258,7 +265,8 @@ export class FirstPersonView {
       }
     }
 
-    // Billboards, far to near, clipped against the walls column by column.
+    // Billboards, far to near. Behind a wall only the part above its top shows: the eye is below the wall tops, so a
+    // ray that clears the nearest wall clears every wall behind it too.
     const invDet = 1 / (planeX * dirY - dirX * planeY);
     const placed = billboards
       .map((b) => ({ b, depth: invDet * (-planeY * b.dx + planeX * b.dy), side: invDet * (dirY * b.dx - dirX * b.dy) }))
@@ -279,10 +287,11 @@ export class FirstPersonView {
       const y1 = Math.min(h, Math.ceil(bottom));
       const light = b.bright ? 1 : shade(depth);
       for (let x = x0; x < x1; x++) {
-        if (zbuf[x] < depth) continue;
+        const end = zbuf[x] < depth ? Math.min(y1, wallTop[x]) : y1;
+        if (end <= y0) continue;
         let texX = Math.min(t.w - 1, (((x - left) / size) * t.w) | 0);
         if (b.flip) texX = t.w - 1 - texX;
-        for (let y = y0; y < y1; y++) {
+        for (let y = y0; y < end; y++) {
           const texY = Math.min(t.h - 1, (((y - top) / size) * t.h) | 0);
           const ti = (texY * t.w + texX) * 4;
           const a = (t.data[ti + 3] / 255) * b.alpha;
