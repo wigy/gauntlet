@@ -6,7 +6,7 @@ import './menu.css';
 
 export interface MenuActions {
   setName(name: string): void;
-  create(set: LevelSetId): void;
+  create(set: LevelSetId, level: number): void;
   openEditor(): void;
   join(gameId: string): void;
   start(): void;
@@ -28,6 +28,8 @@ export class Menu {
   private games: LobbyGame[] = [];
   private sets: LevelSetSummary[] = [];
   private set: LevelSetId | null = null;
+  /** Level (1-based) new games start at. */
+  level = 1;
   private room: RoomInfo | null = null;
   private toastTimer = 0;
   private panel: HTMLElement;
@@ -43,7 +45,12 @@ export class Menu {
     });
     root.addEventListener('change', (e) => {
       const el = e.target as HTMLSelectElement;
-      if (el.classList.contains('set-select')) this.set = el.value as LevelSetId;
+      if (el.classList.contains('set-select')) {
+        this.set = el.value as LevelSetId;
+        this.level = 1;
+        this.lobby();
+      }
+      if (el.classList.contains('level-select')) this.level = Number(el.value);
     });
     root.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -103,6 +110,11 @@ export class Menu {
   lobby(): void {
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.id : undefined;
     this.show('lobby');
+    const count = this.sets.find((s) => s.id === this.set)?.count ?? 0;
+    this.level = Math.max(1, Math.min(this.level, count));
+    const levels = Array.from({ length: count }, (_, i) => i + 1)
+      .map((n) => `<option value="${n}" ${n === this.level ? 'selected' : ''}>Level ${n}</option>`)
+      .join('');
     const rows = this.games.map((g) => `
       <li class="game">
         <div class="game-main">
@@ -123,6 +135,7 @@ export class Menu {
           <select class="set-select" aria-label="Levels to play">
             ${this.sets.map((s) => `<option value="${s.id}" ${s.id === this.set ? 'selected' : ''} ${s.count ? '' : 'disabled'}>${esc(s.label)} (${s.count})</option>`).join('')}
           </select>
+          <select class="level-select" aria-label="Level to start at" ${count ? '' : 'disabled'}>${levels}</select>
           <button class="btn primary" data-action="create">Start a new game</button>
         </div>
         <button class="btn ghost wide editor-link" data-action="editor">Level editor</button>
@@ -202,7 +215,7 @@ export class Menu {
   private act(action: string, id: string | undefined): void {
     switch (action) {
       case 'create':
-        if (this.set) this.actions.create(this.set);
+        if (this.set) this.actions.create(this.set, this.level);
         return;
       case 'editor':
         return this.actions.openEditor();

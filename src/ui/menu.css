@@ -188,7 +188,8 @@ input:focus {
   flex: 1;
 }
 
-.set-select {
+.set-select,
+.level-select {
   padding: 0 10px;
   font: 600 14px 'Inter', system-ui, sans-serif;
   color: var(--text);
@@ -198,7 +199,8 @@ input:focus {
   outline: none;
 }
 
-.set-select option {
+.set-select option,
+.level-select option {
   background: #1c1728;
 }
 
@@ -213,7 +215,8 @@ input:focus {
     flex-direction: column;
   }
 
-  .set-select {
+  .set-select,
+  .level-select {
     padding: 10px;
   }
 }

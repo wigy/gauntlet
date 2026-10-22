@@ -35,7 +35,7 @@ function saveSetting(key: string, value: string): void {
 
 function main(): void {
   const params = new URLSearchParams(location.search);
-  const startLevel = Number(params.get('level')) || undefined;
+  const startLevel = Number(params.get('level')) || 0;
 
   const canvas = document.getElementById('screen') as HTMLCanvasElement;
   const input = new InputManager(window);
@@ -64,7 +64,7 @@ function main(): void {
     document.getElementById('ui')!,
     {
       setName: (n) => conn.send({ t: 'setName', name: n }),
-      create: (set) => conn.send({ t: 'create', set, level: startLevel }),
+      create: (set, level) => conn.send({ t: 'create', set, level }),
       openEditor: () => {
         editing = true;
         updateScreens();
@@ -80,6 +80,8 @@ function main(): void {
     },
     CONTROLS,
   );
+  // ?level=N preselects the start level (for testing).
+  if (startLevel) menu.level = startLevel;
 
   const editor = new Editor(document.getElementById('editor')!, {
     list: () => conn.send({ t: 'levelList' }),
