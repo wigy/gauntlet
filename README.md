@@ -6,17 +6,24 @@ A web remake of Atari's 1985 coin-op **Gauntlet**. Up to four players work toget
 
 ![Gauntlet gameplay](docs/screenshot.jpg)
 
+![The first-person 3D view](docs/screenshot-3d.jpg)
+
 ## Features
 
 - Online co-op for up to 4 heroes (Warrior, Valkyrie, Wizard, Elf), with a lobby and waiting rooms. Players can join a game in progress at the start of a level.
 - Monster generators, keys and doors, food, treasure and potions, and levels that wrap around the edges.
 - Gauntlet II additions: stun tiles, traps, breakable walls, transporters and force fields; dragons, thieves, acid puddles and super sorcerers; amulets (invisibility, invulnerability, repulsiveness, reflective shots, super shots, transportability), poison and the It ball.
+- A first-person 3D view: press **V** to explore the dungeon Wolfenstein-style, with a minimap on the TV in the side panel. In the top-down view the TV shows a small first-person view from your hero.
+- Heroes and monsters walk and turn in eight directions, as in the arcade.
 - Built-in levels, plus optional imports of the original Gauntlet and Gauntlet II arcade maps.
 - A level editor in the browser: draw your own levels, test them right away and play them with friends.
+- Pick the level set and the level to start at in the lobby.
 
 ## Controls
 
-Arrow keys to move, **Z** to fire, **X** to use a potion, **Esc** for the menu. Gamepads also work.
+Arrow keys to move, **Z** to fire, **X** to use a potion, **V** to switch between the top-down and 3D views, **Esc** for the menu. Gamepads also work.
+
+In the 3D view the arrow keys are relative to where your hero faces: left and right turn 45 degrees, up walks forward and down turns round.
 
 ## Running it yourself
 
