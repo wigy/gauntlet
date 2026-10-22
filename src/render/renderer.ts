@@ -25,6 +25,14 @@ const ITEM_GLOW: Record<ItemKind, string> = {
 const HERO_LIGHT = 8;
 const AMBIENT = '#5a566e';
 const HIT_FLASH = 0.14;
+/** Minimap colours for tiles other than walls (which use the level's wall colour) and force fields. */
+const MINIMAP_TILE: Partial<Record<Tile, string>> = {
+  [Tile.Door]: '#b07a30',
+  [Tile.Exit]: '#40c8ff',
+  [Tile.Trap]: '#7a6040',
+  [Tile.Stun]: '#c0c040',
+  [Tile.Transporter]: '#e04040',
+};
 /** Walk frames in order: stride, stand, other stride, stand. */
 const WALK_CYCLE = [0, 1, 2, 1];
 
@@ -117,8 +125,10 @@ export class Renderer {
   menu = false;
   /** Our own controller id in an online game, to highlight our hero; null for local play. */
   me: string | null = null;
-  /** Show the little TV with our hero's first-person view. */
-  tv = true;
+  /** Play in the first-person view: it fills the play area, and the TV shows a minimap instead. */
+  view3d = false;
+  /** In the 3D view, where the controls say we face (radians); the camera follows it instead of the hero's facing. */
+  heading: number | null = null;
   private fpv = new FirstPersonView();
   /** The TV camera's direction, which swings round to the hero's facing. */
   private tvAngle: number | null = null;
@@ -204,11 +214,17 @@ export class Renderer {
     ctx.rect(0, 0, this.playW, h);
     ctx.clip();
     this.lights.length = 0;
-    this.drawMaze(game, h, now);
-    this.drawEntities(game, now);
-    this.drawSmoke(game);
-    if (this.livingCount(game) > 0) this.drawLighting(h);
-    this.drawEmissive(game);
+    const viewer = this.view3d && !this.menu ? this.tvViewer(game) : null;
+    if (viewer?.alive) {
+      // The 3D view, at half resolution (at most 480 px wide) for speed and a chunky look.
+      this.drawView(game, viewer, 0, 0, this.playW, h, Math.min(480, Math.round(this.playW / 2)), now, dt);
+    } else {
+      this.drawMaze(game, h, now);
+      this.drawEntities(game, now);
+      this.drawSmoke(game);
+      if (this.livingCount(game) > 0) this.drawLighting(h);
+      this.drawEmissive(game);
+    }
     ctx.drawImage(vignette(this.playW, h), 0, 0, this.playW, h);
     this.drawScreenEffects(game, h, now);
     this.drawOverlay(game, h, now);
@@ -1230,8 +1246,8 @@ export class Renderer {
     return Math.round(frame ? (w * frame.height) / frame.width : w * 0.76);
   }
 
-  /** The TV, as large as fits in the box (x, y, maxW, maxH), centred horizontally. */
-  private drawTv(game: GameView, hero: Player, x: number, y: number, maxW: number, maxH: number, now: number, dt: number): void {
+  /** The TV, as large as fits in the box (x, y, maxW, maxH), centred horizontally; `paint` fills its screen. */
+  private drawTv(x: number, y: number, maxW: number, maxH: number, paint: (sx: number, sy: number, sw: number, sh: number) => void): void {
     const { ctx } = this;
     const frame = this.sprites.get('tv');
     const fw = Math.round(Math.min(maxW, (maxW * maxH) / this.tvHeight(maxW)));
@@ -1244,13 +1260,45 @@ export class Renderer {
     const sy = fy + scr.y * fh;
     const sw = scr.w * fw;
     const sh = scr.h * fh;
-    // The raycaster works at a fixed low resolution, scaled up to the screen: chunky, like an old set.
-    const bw = Math.min(200, Math.round(sw));
-    const bh = Math.round((bw * sh) / sw);
 
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
+    paint(sx, sy, sw, sh);
+    // CRT: scanlines, darker corners and a soft glare on the glass.
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let y = sy; y < sy + sh; y += 3) ctx.fillRect(sx, y, sw, 1);
+    const vg = ctx.createRadialGradient(sx + sw / 2, sy + sh / 2, Math.min(sw, sh) * 0.35, sx + sw / 2, sy + sh / 2, Math.max(sw, sh) * 0.75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.65)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(sx, sy, sw, sh);
+    const glare = ctx.createLinearGradient(sx, sy, sx + sw * 0.6, sy + sh);
+    glare.addColorStop(0, 'rgba(255,255,255,0.12)');
+    glare.addColorStop(0.45, 'rgba(255,255,255,0.03)');
+    glare.addColorStop(0.46, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glare;
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.restore();
+    if (frame) {
+      ctx.drawImage(frame, fx, fy, fw, fh);
+    } else {
+      ctx.strokeStyle = '#5a3a20';
+      ctx.lineWidth = 10;
+      ctx.strokeRect(sx - 5, sy - 5, sw + 10, sh + 10);
+    }
+  }
+
+  /** The hero's first-person view (static if it's dead), drawn into (x, y, w, h) from a buffer `bw` pixels wide. */
+  private drawView(game: GameView, hero: Player, x: number, y: number, w: number, h: number, bw: number, now: number, dt: number): void {
+    const { ctx } = this;
+    const bh = Math.round((bw * h) / w);
     if (hero.alive) {
       const p = this.pos(game, hero);
-      const target = Math.atan2(hero.fy, hero.fx);
+      const target = this.heading ?? Math.atan2(hero.fy, hero.fx);
       if (this.tvAngle === null || this.tvHero !== hero) this.tvAngle = target;
       const turn = mod(target - this.tvAngle + Math.PI, Math.PI * 2) - Math.PI;
       this.tvAngle += turn * Math.min(1, dt * 12);
@@ -1267,44 +1315,66 @@ export class Renderer {
     } else {
       this.fpv.noise(bw, bh);
     }
-
-    ctx.save();
-    ctx.fillStyle = '#000';
-    ctx.fillRect(sx, sy, sw, sh);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.fpv.canvas, sx, sy, sw, sh);
+    ctx.drawImage(this.fpv.canvas, x, y, w, h);
     ctx.imageSmoothingEnabled = true;
-    // CRT: scanlines, darker corners and a soft glare on the glass.
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    for (let y = sy; y < sy + sh; y += 3) ctx.fillRect(sx, y, sw, 1);
-    const vg = ctx.createRadialGradient(sx + sw / 2, sy + sh / 2, Math.min(sw, sh) * 0.35, sx + sw / 2, sy + sh / 2, Math.max(sw, sh) * 0.75);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.65)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(sx, sy, sw, sh);
-    const glare = ctx.createLinearGradient(sx, sy, sx + sw * 0.6, sy + sh);
-    glare.addColorStop(0, 'rgba(255,255,255,0.12)');
-    glare.addColorStop(0.45, 'rgba(255,255,255,0.03)');
-    glare.addColorStop(0.46, 'rgba(255,255,255,0)');
-    ctx.fillStyle = glare;
-    ctx.fillRect(sx, sy, sw, sh);
     if (!hero.alive) {
-      ctx.font = `700 ${Math.round(sh * 0.11)}px ${UI_FONT}`;
+      ctx.font = `700 ${Math.round(h * 0.11)}px ${UI_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(sx, sy + sh / 2 - sh * 0.1, sw, sh * 0.2);
+      ctx.fillRect(x, y + h / 2 - h * 0.1, w, h * 0.2);
       ctx.fillStyle = '#e8e8e8';
-      ctx.fillText('NO SIGNAL', sx + sw / 2, sy + sh / 2);
+      ctx.fillText('NO SIGNAL', x + w / 2, y + h / 2);
     }
-    if (frame) {
-      ctx.drawImage(frame, fx, fy, fw, fh);
-    } else {
-      ctx.strokeStyle = '#5a3a20';
-      ctx.lineWidth = 10;
-      ctx.strokeRect(sx - 5, sy - 5, sw + 10, sh + 10);
+  }
+
+  /** A small top-down map around the hero for the TV, with an arrow for where the 3D camera looks. */
+  private drawMinimap(game: GameView, hero: Player, sx: number, sy: number, sw: number, sh: number): void {
+    const { ctx } = this;
+    const cell = Math.max(3, Math.round(Math.min(sw, sh) / 20));
+    const c = hero.alive ? this.pos(game, hero) : this.cam;
+    const px = (x: number) => sx + sw / 2 + game.dxw(c.x, x) * cell;
+    const py = (y: number) => sy + sh / 2 + game.dyw(c.y, y) * cell;
+    const fieldOn = forceFieldOn(game.time);
+    const wall = WALL_COLORS[mod(game.levelNumber - 1, WALL_COLORS.length)];
+    const halfW = sw / 2 / cell + 1;
+    const halfH = sh / 2 / cell + 1;
+    for (let ty = Math.floor(c.y - halfH); ty <= c.y + halfH; ty++) {
+      for (let tx = Math.floor(c.x - halfW); tx <= c.x + halfW; tx++) {
+        // Outside a level that doesn't wrap there's nothing to show.
+        const { width, height, wrapX, wrapY } = game.level;
+        if ((!wrapX && (tx < 0 || tx >= width)) || (!wrapY && (ty < 0 || ty >= height))) continue;
+        const t = tileAt(game.level, tx, ty);
+        const color = isWallLike(t) ? wall : MINIMAP_TILE[t] ?? (t === Tile.ForceField && fieldOn ? '#ff6020' : '#1c1a26');
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.floor(sx + sw / 2 + (tx - c.x) * cell), Math.floor(sy + sh / 2 + (ty - c.y) * cell), cell + 1, cell + 1);
+      }
     }
-    ctx.restore();
+    const dot = (x: number, y: number, r: number, color: string) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.round(px(x) - r), Math.round(py(y) - r), r * 2, r * 2);
+    };
+    for (const it of game.items.values()) dot(it.x + 0.5, it.y + 0.5, cell * 0.25, '#ffd040');
+    for (const g of game.generators) dot(g.x, g.y, cell * 0.4, '#ff9030');
+    for (const m of game.monsters) if (m.invisible <= 0) dot(this.pos(game, m).x, this.pos(game, m).y, cell * 0.3, '#ff3030');
+    for (const pl of game.players) if (pl && pl.alive && pl !== hero) dot(this.pos(game, pl).x, this.pos(game, pl).y, cell * 0.4, pl.def.color);
+    if (!hero.alive) return;
+    // Our hero: an arrow pointing where the camera looks.
+    const a = this.tvAngle ?? Math.atan2(hero.fy, hero.fx);
+    const hx = px(c.x);
+    const hy = py(c.y);
+    const r = cell * 0.9;
+    ctx.fillStyle = hero.def.color;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hx + Math.cos(a) * r, hy + Math.sin(a) * r);
+    ctx.lineTo(hx + Math.cos(a + 2.5) * r * 0.8, hy + Math.sin(a + 2.5) * r * 0.8);
+    ctx.lineTo(hx + Math.cos(a - 2.5) * r * 0.8, hy + Math.sin(a - 2.5) * r * 0.8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
   }
 
   /** Everything the TV camera can see besides the maze, as billboards relative to the eye. */
@@ -1406,12 +1476,17 @@ export class Renderer {
 
     // The player cards, then the first-person TV below them, which shrinks (or goes) when the window is short.
     const top = 94;
-    const viewer = this.tv ? this.tvViewer(game) : null;
+    const viewer = this.tvViewer(game);
     const tvH = viewer ? this.tvHeight(HUD_W - 20) + 4 : 0;
     const panelH = Math.max(100, Math.min(150, (h - top - 6 - tvH) / 4));
     for (let slot = 0; slot < 4; slot++) this.drawPlayerCard(game, slot, x + 10, top + slot * panelH, HUD_W - 20, panelH - 10, now);
     const tvTop = top + 4 * panelH - 4;
-    if (viewer && h - tvTop - 8 >= 90) this.drawTv(game, viewer, x + 10, tvTop, HUD_W - 20, h - tvTop - 8, now, dt);
+    if (viewer && h - tvTop - 8 >= 90) {
+      this.drawTv(x + 10, tvTop, HUD_W - 20, h - tvTop - 8, (sx, sy, sw, sh) => {
+        if (this.view3d) this.drawMinimap(game, viewer, sx, sy, sw, sh);
+        else this.drawView(game, viewer, sx, sy, sw, sh, Math.min(200, Math.round(sw)), now, dt);
+      });
+    }
   }
 
   private drawPlayerCard(game: GameView, slot: number, x: number, y: number, w: number, h: number, now: number): void {

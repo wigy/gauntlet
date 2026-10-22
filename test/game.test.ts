@@ -92,6 +92,18 @@ describe('Game', () => {
     expect(p.x).toBeGreaterThan(x);
   });
 
+  it('turns on the spot when asked to face a direction', () => {
+    const game = joined(CORRIDOR);
+    const p = game.players[0]!;
+    run(game, { fx: 1, fy: -1 }, 30);
+    expect([p.fx, p.fy]).toEqual([1, -1]);
+    expect(p.x).toBeCloseTo(1.5);
+    expect(p.y).toBeCloseTo(1.5);
+    // Walking that way afterwards needs no turn.
+    run(game, { dx: 1, dy: -1 }, 1);
+    expect(p.x).toBeGreaterThan(1.5);
+  });
+
   it('turns monsters before they walk', () => {
     const game = joined(`---
 ##########

@@ -1,7 +1,8 @@
 import { Audio } from './audio/audio';
 import { Game } from './core/game';
-import type { GameEvent } from './core/game';
+import type { GameEvent, Player, PlayerInput } from './core/game';
 import { InputManager } from './input/input';
+import { TankControls } from './input/tank';
 import { Editor } from './editor/editor';
 import { BUILTIN_LEVELS } from './levels/builtin';
 import { Connection } from './net/connection';
@@ -12,9 +13,9 @@ import { Menu } from './ui/menu';
 
 /** localStorage key for the player id the server gave us, so our name is remembered. */
 const ID_KEY = 'gauntlet.playerId';
-/** localStorage key: '0' when the first-person TV is switched off. */
-const TV_KEY = 'gauntlet.tv';
-const CONTROLS = 'Arrow keys move · Z fire · X potion · V first-person TV · gamepads work too · Esc for the menu';
+/** localStorage key: '3d' while playing in the first-person view. */
+const VIEW_KEY = 'gauntlet.view';
+const CONTROLS = 'Arrow keys move · Z fire · X potion · V 3D view · gamepads work too · Esc for the menu';
 
 function loadSetting(key: string): string | null {
   try {
@@ -39,7 +40,9 @@ function main(): void {
   const canvas = document.getElementById('screen') as HTMLCanvasElement;
   const input = new InputManager(window);
   const renderer = new Renderer(canvas);
-  renderer.tv = loadSetting(TV_KEY) !== '0';
+  renderer.view3d = loadSetting(VIEW_KEY) === '3d';
+  const tank = new TankControls();
+  let tankFor: Player | null = null;
   const audio = new Audio();
   const conn = new Connection();
   const mirror = new Mirror();
@@ -216,8 +219,9 @@ function main(): void {
       updateScreens();
     }
     if (e.code === 'KeyV' && inGame() && !paused && !e.repeat) {
-      renderer.tv = !renderer.tv;
-      saveSetting(TV_KEY, renderer.tv ? '1' : '0');
+      renderer.view3d = !renderer.view3d;
+      tankFor = null;
+      saveSetting(VIEW_KEY, renderer.view3d ? '3d' : '2d');
     }
   });
   window.addEventListener('pointerdown', () => audio.unlock());
@@ -227,8 +231,18 @@ function main(): void {
     const now = nowMs / 1000;
     if (inGame()) {
       // Inputs go to the server only when they change.
-      const i = paused ? { dx: 0, dy: 0, fire: false, magic: false } : input.combined();
-      const key = `${i.dx},${i.dy},${+i.fire},${+i.magic}`;
+      let i: PlayerInput = paused ? { dx: 0, dy: 0, fire: false, magic: false } : input.combined();
+      // In the 3D view the controls turn and walk relative to where the hero faces.
+      const me = mirror.me;
+      if (renderer.view3d && me?.alive) {
+        if (tankFor !== me) tank.reset(me.fx, me.fy);
+        tankFor = me;
+        i = tank.translate(i, now);
+        renderer.heading = tank.angle;
+      } else {
+        renderer.heading = null;
+      }
+      const key = `${i.dx},${i.dy},${+i.fire},${+i.magic},${i.fx ?? 0},${i.fy ?? 0}`;
       if (key !== sentInput) {
         sentInput = key;
         conn.send({ t: 'input', ...i });

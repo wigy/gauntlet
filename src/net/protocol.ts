@@ -25,7 +25,8 @@ export type ClientMessage =
   /** Switch to another hero while the game is waiting, if nobody else has it. */
   | { t: 'pickHero'; hero: HeroClass }
   | { t: 'leave' }
-  | { t: 'input'; dx: number; dy: number; fire: boolean; magic: boolean }
+  /** fx/fy: direction to face while standing still (3D view controls). */
+  | { t: 'input'; dx: number; dy: number; fire: boolean; magic: boolean; fx?: number; fy?: number }
   // Level editor. Built-in and arcade levels are read-only; custom levels can be saved, deleted and reordered.
   | { t: 'levelList' }
   | { t: 'levelGet'; set: LevelSetId; id: string }

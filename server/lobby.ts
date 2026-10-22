@@ -203,7 +203,7 @@ export class Lobby {
         return;
       case 'input': {
         const axis = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0);
-        client.input = { dx: axis(msg.dx), dy: axis(msg.dy), fire: msg.fire === true, magic: msg.magic === true };
+        client.input = { dx: axis(msg.dx), dy: axis(msg.dy), fire: msg.fire === true, magic: msg.magic === true, fx: axis(msg.fx), fy: axis(msg.fy) };
         return;
       }
     }

@@ -19,6 +19,9 @@ export interface PlayerInput {
   dy: number;
   fire: boolean;
   magic: boolean;
+  /** Direction to face while standing still (the 3D view's turn controls), -1..1. */
+  fx?: number;
+  fy?: number;
 }
 
 export interface Player {
@@ -426,10 +429,13 @@ export class Game {
     const sign = p.dizzy > 0 ? -1 : 1;
     let dx = stunned ? 0 : sign * Math.sign(Math.round(input.dx * 1.4));
     let dy = stunned ? 0 : sign * Math.sign(Math.round(input.dy * 1.4));
-    // A new direction turns the hero first; walking starts once the turn is done.
-    if ((dx || dy) && (dx !== p.fx || dy !== p.fy)) {
-      p.fx = dx;
-      p.fy = dy;
+    // A new direction turns the hero first; walking starts once the turn is done. Standing still, the input can also
+    // ask to face a direction without walking.
+    const tx = dx || dy ? dx : stunned ? 0 : sign * Math.sign(input.fx ?? 0);
+    const ty = dx || dy ? dy : stunned ? 0 : sign * Math.sign(input.fy ?? 0);
+    if ((tx || ty) && (tx !== p.fx || ty !== p.fy)) {
+      p.fx = tx;
+      p.fy = ty;
       p.turn = TURN_TIME;
     }
 
