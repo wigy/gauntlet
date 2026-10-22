@@ -11,6 +11,8 @@ export const SPRITE_NAMES = [
   'wall-orange', 'wall-teal', 'floor', 'door',
   // Gauntlet II
   'supersorcerer', 'dragon', 'thief', 'acid', 'amulet', 'poison', 'it',
+  // First-person view
+  'ceiling', 'tv',
 ] as const;
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];

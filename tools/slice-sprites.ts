@@ -10,6 +10,9 @@
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
  * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
  *
+ * ceiling is one square texture (scaled to SIZE). tv is the first-person view's TV set on magenta with its screen
+ * flat green: both become transparent (the renderer finds the screen as the hole in the middle), cropped to the set.
+ *
  * <sheet-dir>/walk/<name>.png|jpg are walk sheets: one character in a 5x3 grid, columns facing WALK_DIRS (the other
  * three directions are mirrors), rows the walk frames. They become <name>-<dir>-<frame>.png. All frames of a sheet
  * share one scale, each column one horizontal centre and each row one baseline, so the animation doesn't jitter.
@@ -30,6 +33,7 @@ const SHEETS: Record<string, string[]> = {
   'g2-items': ['amulet', 'poison', 'it'],
 };
 const TILES = ['wall-orange', 'floor', 'wall-teal', 'door'];
+const TV_WIDTH = 480;
 const WALK_DIRS = ['s', 'se', 'e', 'ne', 'n'];
 const WALK_FRAMES = 3;
 
@@ -225,6 +229,54 @@ function despill(png: PNG): void {
   }
 }
 
+function isScreenGreen(png: PNG, i: number): boolean {
+  const [r, g, b] = [png.data[i], png.data[i + 1], png.data[i + 2]];
+  return g > 120 && g > r * 1.5 && g > b * 1.5;
+}
+
+/** The foreground of a whole sheet, cropped and scaled to `width`, with magenta and screen green transparent. */
+function cutout(png: PNG, width: number): PNG {
+  const clear = (i: number) => isBackground(png, i) || isScreenGreen(png, i);
+  let x0 = png.width, y0 = png.height, x1 = 0, y1 = 0;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (isBackground(png, (y * png.width + x) * 4)) continue;
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x + 1);
+      y1 = Math.max(y1, y + 1);
+    }
+  }
+  const height = Math.round((width * (y1 - y0)) / (x1 - x0));
+  const out = new PNG({ width, height });
+  const s = (x1 - x0) / width;
+  for (let oy = 0; oy < height; oy++) {
+    for (let ox = 0; ox < width; ox++) {
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
+      for (let y = Math.floor(y0 + oy * s); y < Math.floor(y0 + (oy + 1) * s); y++) {
+        for (let x = Math.floor(x0 + ox * s); x < Math.floor(x0 + (ox + 1) * s); x++) {
+          n++;
+          const i = (y * png.width + x) * 4;
+          if (clear(i)) continue;
+          r += png.data[i];
+          g += png.data[i + 1];
+          b += png.data[i + 2];
+          a++;
+        }
+      }
+      const o = (oy * width + ox) * 4;
+      const cover = n ? a / n : 0;
+      // Pull the green and pink fringes out of the edge pixels.
+      const [cr, cg, cb] = a ? [r / a, g / a, b / a] : [0, 0, 0];
+      out.data[o] = cover < 1 ? Math.min(cr, cg + 40) : cr;
+      out.data[o + 1] = cover < 1 ? Math.min(cg, Math.max(cr, cb)) : cg;
+      out.data[o + 2] = cover < 1 ? Math.min(cb, cg + 40) : cb;
+      out.data[o + 3] = Math.round(255 * Math.min(1, Math.max(0, (cover - 0.15) / 0.7)));
+    }
+  }
+  return out;
+}
+
 function avg(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
@@ -265,6 +317,19 @@ function main(): void {
       writeFileSync(join(OUT, `${name}-${WALK_DIRS[c]}-${r}.png`), PNG.sync.write(resample(png, box, true, crop)));
     });
     console.log(`walk/${name}: ${boxes.length} frames`);
+  }
+
+  const ceilingFile = findSheet(dir, 'ceiling');
+  if (ceilingFile) {
+    const png = readImage(ceilingFile);
+    writeFileSync(join(OUT, 'ceiling.png'), PNG.sync.write(resample(png, { x0: 0, y0: 0, x1: png.width, y1: png.height }, false)));
+    console.log('ceiling: 1 texture');
+  }
+
+  const tvFile = findSheet(dir, 'tv');
+  if (tvFile) {
+    writeFileSync(join(OUT, 'tv.png'), PNG.sync.write(cutout(readImage(tvFile), TV_WIDTH)));
+    console.log('tv: 1 frame');
   }
 
   const tilesFile = findSheet(dir, 'tiles');

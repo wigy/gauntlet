@@ -12,19 +12,21 @@ import { Menu } from './ui/menu';
 
 /** localStorage key for the player id the server gave us, so our name is remembered. */
 const ID_KEY = 'gauntlet.playerId';
-const CONTROLS = 'Arrow keys move · Z fire · X potion · gamepads work too · Esc for the menu';
+/** localStorage key: '0' when the first-person TV is switched off. */
+const TV_KEY = 'gauntlet.tv';
+const CONTROLS = 'Arrow keys move · Z fire · X potion · V first-person TV · gamepads work too · Esc for the menu';
 
-function loadId(): string | null {
+function loadSetting(key: string): string | null {
   try {
-    return localStorage.getItem(ID_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function saveId(id: string): void {
+function saveSetting(key: string, value: string): void {
   try {
-    localStorage.setItem(ID_KEY, id);
+    localStorage.setItem(key, value);
   } catch {
     // Private mode etc.: we just won't be remembered.
   }
@@ -37,6 +39,7 @@ function main(): void {
   const canvas = document.getElementById('screen') as HTMLCanvasElement;
   const input = new InputManager(window);
   const renderer = new Renderer(canvas);
+  renderer.tv = loadSetting(TV_KEY) !== '0';
   const audio = new Audio();
   const conn = new Connection();
   const mirror = new Mirror();
@@ -141,7 +144,7 @@ function main(): void {
 
   conn.onStatus = (status) => {
     if (status === 'open') {
-      conn.send({ t: 'hello', id: loadId() });
+      conn.send({ t: 'hello', id: loadSetting(ID_KEY) });
       return;
     }
     // A new connection starts outside any game.
@@ -159,7 +162,7 @@ function main(): void {
     const now = performance.now() / 1000;
     switch (msg.t) {
       case 'welcome':
-        saveId(msg.id);
+        saveSetting(ID_KEY, msg.id);
         name = msg.name;
         menu.setName(name);
         if (!name) menu.askName(null);
@@ -211,6 +214,10 @@ function main(): void {
     if (e.code === 'Escape' && inGame()) {
       paused = !paused;
       updateScreens();
+    }
+    if (e.code === 'KeyV' && inGame() && !paused && !e.repeat) {
+      renderer.tv = !renderer.tv;
+      saveSetting(TV_KEY, renderer.tv ? '1' : '0');
     }
   });
   window.addEventListener('pointerdown', () => audio.unlock());

@@ -5,6 +5,8 @@ import { forceFieldOn } from '../core/game';
 import type { Game, Generator, Monster, Player, Shot } from '../core/game';
 import { drawTileOverlay } from './tiles';
 import { Particles, edgeShades, glow, shadowBlob, vignette } from './fx';
+import { FirstPersonView } from './firstperson';
+import type { Billboard } from './firstperson';
 import { Sprites, isWalker, silhouette, walkDir } from './sprites';
 import type { SpriteName } from './sprites';
 
@@ -115,6 +117,14 @@ export class Renderer {
   menu = false;
   /** Our own controller id in an online game, to highlight our hero; null for local play. */
   me: string | null = null;
+  /** Show the little TV with our hero's first-person view. */
+  tv = true;
+  private fpv = new FirstPersonView();
+  /** The TV camera's direction, which swings round to the hero's facing. */
+  private tvAngle: number | null = null;
+  private tvHero: Player | null = null;
+  /** Where the screen is in the TV image (fractions of its size), found from the hole in it once it has loaded. */
+  private tvScreen: { x: number; y: number; w: number; h: number } | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -204,7 +214,7 @@ export class Renderer {
     this.drawOverlay(game, h, now);
     ctx.restore();
 
-    if (!this.menu) this.drawHud(game, h, now);
+    if (!this.menu) this.drawHud(game, h, now, dt);
   }
 
   // ---------------------------------------------------------------- coordinates
@@ -1206,7 +1216,156 @@ export class Renderer {
     }
   }
 
-  private drawHud(game: GameView, h: number, now: number): void {
+  // ---------------------------------------------------------------- first-person TV
+
+  /** The hero the TV shows: ours online, otherwise the first one playing. */
+  private tvViewer(game: GameView): Player | null {
+    if (this.me !== null) return game.players.find((p) => p?.controller === this.me) ?? null;
+    return game.players.find((p) => p?.alive) ?? null;
+  }
+
+  /** Height of the TV set when it's `w` wide. */
+  private tvHeight(w: number): number {
+    const frame = this.sprites.get('tv');
+    return Math.round(frame ? (w * frame.height) / frame.width : w * 0.76);
+  }
+
+  /** The TV, as large as fits in the box (x, y, maxW, maxH), centred horizontally. */
+  private drawTv(game: GameView, hero: Player, x: number, y: number, maxW: number, maxH: number, now: number, dt: number): void {
+    const { ctx } = this;
+    const frame = this.sprites.get('tv');
+    const fw = Math.round(Math.min(maxW, (maxW * maxH) / this.tvHeight(maxW)));
+    const fh = this.tvHeight(fw);
+    const fx = Math.round(x + (maxW - fw) / 2);
+    const fy = Math.round(y);
+    if (frame && !this.tvScreen) this.tvScreen = findScreen(frame);
+    const scr = frame && this.tvScreen ? this.tvScreen : { x: 0.1, y: 0.12, w: 0.7, h: 0.76 };
+    const sx = fx + scr.x * fw;
+    const sy = fy + scr.y * fh;
+    const sw = scr.w * fw;
+    const sh = scr.h * fh;
+    // The raycaster works at a fixed low resolution, scaled up to the screen: chunky, like an old set.
+    const bw = Math.min(200, Math.round(sw));
+    const bh = Math.round((bw * sh) / sw);
+
+    if (hero.alive) {
+      const p = this.pos(game, hero);
+      const target = Math.atan2(hero.fy, hero.fx);
+      if (this.tvAngle === null || this.tvHero !== hero) this.tvAngle = target;
+      const turn = mod(target - this.tvAngle + Math.PI, Math.PI * 2) - Math.PI;
+      this.tvAngle += turn * Math.min(1, dt * 12);
+      this.tvHero = hero;
+      const moving = this.moving(game, hero);
+      const bob = moving ? Math.sin(now * hero.def.speed * 2.2 * Math.PI) * bh * 0.012 : 0;
+      this.fpv.render(
+        game.level,
+        { x: p.x, y: p.y, angle: this.tvAngle, bob },
+        { wall: this.sprites.wall(game.levelNumber), door: this.sprites.get('door'), floor: this.sprites.get('floor'), ceiling: this.sprites.get('ceiling') },
+        this.billboards(game, hero, p, this.tvAngle, now),
+        bw, bh, forceFieldOn(game.time),
+      );
+    } else {
+      this.fpv.noise(bw, bh);
+    }
+
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.fpv.canvas, sx, sy, sw, sh);
+    ctx.imageSmoothingEnabled = true;
+    // CRT: scanlines, darker corners and a soft glare on the glass.
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let y = sy; y < sy + sh; y += 3) ctx.fillRect(sx, y, sw, 1);
+    const vg = ctx.createRadialGradient(sx + sw / 2, sy + sh / 2, Math.min(sw, sh) * 0.35, sx + sw / 2, sy + sh / 2, Math.max(sw, sh) * 0.75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.65)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(sx, sy, sw, sh);
+    const glare = ctx.createLinearGradient(sx, sy, sx + sw * 0.6, sy + sh);
+    glare.addColorStop(0, 'rgba(255,255,255,0.12)');
+    glare.addColorStop(0.45, 'rgba(255,255,255,0.03)');
+    glare.addColorStop(0.46, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glare;
+    ctx.fillRect(sx, sy, sw, sh);
+    if (!hero.alive) {
+      ctx.font = `700 ${Math.round(sh * 0.11)}px ${UI_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(sx, sy + sh / 2 - sh * 0.1, sw, sh * 0.2);
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fillText('NO SIGNAL', sx + sw / 2, sy + sh / 2);
+    }
+    if (frame) {
+      ctx.drawImage(frame, fx, fy, fw, fh);
+    } else {
+      ctx.strokeStyle = '#5a3a20';
+      ctx.lineWidth = 10;
+      ctx.strokeRect(sx - 5, sy - 5, sw + 10, sh + 10);
+    }
+    ctx.restore();
+  }
+
+  /** Everything the TV camera can see besides the maze, as billboards relative to the eye. */
+  private billboards(game: GameView, hero: Player, eye: Pos, angle: number, now: number): Billboard[] {
+    const out: Billboard[] = [];
+    const near = (dx: number, dy: number) => dx * dx + dy * dy < 24 * 24 && dx * Math.cos(angle) + dy * Math.sin(angle) > 0;
+    // A walker's sheet direction as seen from the eye: its facing relative to the line of sight, turned into the
+    // top-down convention where 's' faces the viewer.
+    const seen = (name: SpriteName, fx: number, fy: number, dx: number, dy: number, phase: number | null) => {
+      const rel = Math.atan2(fy, fx) - Math.atan2(dy, dx);
+      const k = Math.round(rel / (Math.PI / 4));
+      return this.look(name, Math.round(Math.sin((k * Math.PI) / 4)), Math.round(-Math.cos((k * Math.PI) / 4)), phase);
+    };
+
+    for (const [key, it] of game.items) {
+      const dx = game.dxw(eye.x, it.x + 0.5);
+      const dy = game.dyw(eye.y, it.y + 0.5);
+      const img = this.sprites.get(ITEM_SPRITES[it.kind]);
+      if (img && near(dx, dy)) out.push({ dx, dy, img, flip: false, size: 0.42, lift: 0.04 + 0.03 * Math.sin(now * 2.6 + key * 0.7), alpha: 1 });
+    }
+    const gen = this.sprites.get('generator');
+    for (const g of game.generators) {
+      const dx = game.dxw(eye.x, g.x);
+      const dy = game.dyw(eye.y, g.y);
+      if (gen && near(dx, dy)) out.push({ dx, dy, img: gen, flip: false, size: 0.8, lift: 0, alpha: 1 });
+    }
+    for (const m of game.monsters) {
+      const p = this.pos(game, m);
+      const dx = game.dxw(eye.x, p.x);
+      const dy = game.dyw(eye.y, p.y);
+      if (!near(dx, dy)) continue;
+      const moving = this.moving(game, m);
+      const floats = m.kind === 'ghost' || m.kind === 'death';
+      const look = seen(m.kind, m.fx, m.fy, dx, dy, moving || floats ? now * m.def.speed * (moving ? 2.2 : 1) + this.seed(m) : null);
+      if (!look) continue;
+      const scale = (m.def.radius ?? 0.38) / 0.38;
+      const alpha = m.invisible > 0 ? 0.15 : m.kind === 'ghost' ? 0.8 : 1;
+      out.push({ dx, dy, img: look.img, flip: look.flip, size: (0.95 + 0.1 * m.rank) * scale * 0.62, lift: m.kind === 'ghost' ? 0.06 : 0, alpha });
+    }
+    for (const pl of game.players) {
+      if (!pl || !pl.alive || pl === hero) continue;
+      const p = this.pos(game, pl);
+      const dx = game.dxw(eye.x, p.x);
+      const dy = game.dyw(eye.y, p.y);
+      if (!near(dx, dy)) continue;
+      const look = seen(pl.hero, pl.fx, pl.fy, dx, dy, this.moving(game, pl) ? now * pl.def.speed * 2.2 + pl.slot * 1.7 : null);
+      if (look) out.push({ dx, dy, img: look.img, flip: look.flip, size: 0.8, lift: 0, alpha: pl.amulet === 'invisibility' ? 0.35 : 1 });
+    }
+    for (const s of game.shots) {
+      const p = this.pos(game, s);
+      const dx = game.dxw(eye.x, p.x);
+      const dy = game.dyw(eye.y, p.y);
+      if (!near(dx, dy)) continue;
+      const color = s.kind === 'fireball' ? '#ff7a20' : s.kind === 'rock' ? '#a8a49c' : s.kind === 'super' ? '#fff0a0' : (game.players[s.owner]?.def.color ?? '#ffffff');
+      const rock = s.kind === 'rock';
+      out.push({ dx, dy, img: glow(color), flip: false, size: rock ? 0.3 : 0.4, lift: rock ? 0.2 + Math.sin(Math.min(1, s.ttl) * Math.PI) * 0.4 : 0.25, alpha: 1, bright: !rock });
+    }
+    return out;
+  }
+
+  private drawHud(game: GameView, h: number, now: number, dt: number): void {
     const { ctx } = this;
     const x = this.playW;
     const bg = ctx.createLinearGradient(x, 0, x + HUD_W, h);
@@ -1245,9 +1404,14 @@ export class Renderer {
     ctx.fillStyle = sep;
     ctx.fillRect(x + 20, 82, HUD_W - 40, 1);
 
+    // The player cards, then the first-person TV below them, which shrinks (or goes) when the window is short.
     const top = 94;
-    const panelH = Math.max(100, Math.min(150, (h - top - 6) / 4));
+    const viewer = this.tv ? this.tvViewer(game) : null;
+    const tvH = viewer ? this.tvHeight(HUD_W - 20) + 4 : 0;
+    const panelH = Math.max(100, Math.min(150, (h - top - 6 - tvH) / 4));
     for (let slot = 0; slot < 4; slot++) this.drawPlayerCard(game, slot, x + 10, top + slot * panelH, HUD_W - 20, panelH - 10, now);
+    const tvTop = top + 4 * panelH - 4;
+    if (viewer && h - tvTop - 8 >= 90) this.drawTv(game, viewer, x + 10, tvTop, HUD_W - 20, h - tvTop - 8, now, dt);
   }
 
   private drawPlayerCard(game: GameView, slot: number, x: number, y: number, w: number, h: number, now: number): void {
@@ -1457,4 +1621,34 @@ export class Renderer {
     this.ctx.arc(x, y, r, 0, Math.PI * 2);
     this.ctx.fill();
   }
+}
+
+/** The screen hole in the TV image: the longest transparent run across its middle row, then down through that. */
+function findScreen(img: HTMLImageElement): { x: number; y: number; w: number; h: number } {
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, img.width, img.height).data;
+  const clear = (x: number, y: number) => data[(y * img.width + x) * 4 + 3] < 128;
+  const longest = (n: number, at: (i: number) => boolean): [number, number] => {
+    let best: [number, number] = [0, 0];
+    for (let i = 0; i < n; ) {
+      if (!at(i)) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < n && at(i)) i++;
+      if (i - start > best[1] - best[0]) best = [start, i];
+    }
+    return best;
+  };
+  const midY = Math.floor(img.height / 2);
+  const [x0, x1] = longest(img.width, (x) => clear(x, midY));
+  const midX = Math.floor((x0 + x1) / 2);
+  const [y0, y1] = longest(img.height, (y) => clear(midX, y));
+  if (x1 - x0 < img.width * 0.2 || y1 - y0 < img.height * 0.2) return { x: 0.1, y: 0.12, w: 0.7, h: 0.76 };
+  return { x: x0 / img.width, y: y0 / img.height, w: (x1 - x0) / img.width, h: (y1 - y0) / img.height };
 }
