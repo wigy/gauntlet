@@ -16,6 +16,9 @@
  * <sheet-dir>/walk/<name>.png|jpg are walk sheets: one character in a 5x3 grid, columns facing WALK_DIRS (the other
  * three directions are mirrors), rows the walk frames. They become <name>-<dir>-<frame>.png. All frames of a sheet
  * share one scale, each column one horizontal centre and each row one baseline, so the animation doesn't jitter.
+ * An optional <name>-diag sheet (2x3: se, ne) replaces the diagonal columns, which the image generator draws better
+ * on their own; it is scaled so the figures are as tall as in the main sheet. A walk sheet whose background is an
+ * off-shade of magenta is keyed on the colour of its corners instead.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +38,7 @@ const SHEETS: Record<string, string[]> = {
 const TILES = ['wall-orange', 'floor', 'wall-teal', 'door'];
 const TV_WIDTH = 480;
 const WALK_DIRS = ['s', 'se', 'e', 'ne', 'n'];
+const WALK_DIAG_DIRS = ['se', 'ne'];
 const WALK_FRAMES = 3;
 
 interface Box {
@@ -54,11 +58,23 @@ function readImage(file: string): PNG {
   return png;
 }
 
+/** Background colour of the sheet being cut, when it isn't the usual bright magenta. */
+let keyColor: [number, number, number] | null = null;
+
 function isBackground(png: PNG, i: number): boolean {
   const r = png.data[i];
   const g = png.data[i + 1];
   const b = png.data[i + 2];
+  if (keyColor) return Math.abs(r - keyColor[0]) + Math.abs(g - keyColor[1]) + Math.abs(b - keyColor[2]) < 90;
   return r > 190 && b > 190 && g < 100 && Math.abs(r - b) < 60;
+}
+
+/** Key on the corner colour if the sheet's background isn't the bright magenta isBackground expects. */
+function detectKey(png: PNG): void {
+  keyColor = null;
+  const corners = [0, png.width - 1, (png.height - 1) * png.width, png.height * png.width - 1].map((p) => p * 4);
+  if (corners.every((i) => isBackground(png, i))) return;
+  keyColor = [0, 1, 2].map((k) => avg(corners.map((i) => png.data[i + k]))) as [number, number, number];
 }
 
 /** Blobs of foreground pixels, found on a coarse grid (so nearby fragments like a sword tip join their owner). */
@@ -301,23 +317,33 @@ function main(): void {
 
   const walkDir = join(dir, 'walk');
   const walkSheets = existsSync(walkDir) ? [...new Set(readdirSync(walkDir).map((f) => f.replace(/\.(png|jpe?g)$/, '')))] : [];
+  // Crop side per figure height in each main sheet, so its diagonal sheet comes out at the same scale.
+  const sidePerHeight = new Map<string, number>();
   for (const name of walkSheets.sort()) {
     const file = findSheet(walkDir, name);
     if (!file) continue;
     const png = readImage(file);
-    const cols = WALK_DIRS.length;
+    detectKey(png);
+    const diag = name.endsWith('-diag');
+    const dirs = diag ? WALK_DIAG_DIRS : WALK_DIRS;
+    const cols = dirs.length;
     const boxes = gridSprites(png, cols, WALK_FRAMES);
-    const side = Math.max(...boxes.map((b) => Math.max(b.x1 - b.x0, b.y1 - b.y0)));
-    const centre = WALK_DIRS.map((_, c) => avg([0, 1, 2].map((r) => (boxes[r * cols + c].x0 + boxes[r * cols + c].x1) / 2)));
+    const tallest = Math.max(...boxes.map((b) => b.y1 - b.y0));
+    const widest = Math.max(...boxes.map((b) => b.x1 - b.x0));
+    const ratio = diag ? sidePerHeight.get(name.slice(0, -5)) : undefined;
+    const side = ratio ? Math.max(widest, tallest * ratio) : Math.max(widest, tallest);
+    if (!diag) sidePerHeight.set(name, side / tallest);
+    const centre = dirs.map((_, c) => avg([0, 1, 2].map((r) => (boxes[r * cols + c].x0 + boxes[r * cols + c].x1) / 2)));
     const base = [0, 1, 2].map((r) => Math.max(...boxes.slice(r * cols, (r + 1) * cols).map((b) => b.y1)));
     boxes.forEach((box, i) => {
       const c = i % cols;
       const r = Math.floor(i / cols);
       const crop = { x0: centre[c] - side / 2, x1: centre[c] + side / 2, y0: base[r] - side, y1: base[r] };
-      writeFileSync(join(OUT, `${name}-${WALK_DIRS[c]}-${r}.png`), PNG.sync.write(resample(png, box, true, crop)));
+      writeFileSync(join(OUT, `${name.replace(/-diag$/, '')}-${dirs[c]}-${r}.png`), PNG.sync.write(resample(png, box, true, crop)));
     });
     console.log(`walk/${name}: ${boxes.length} frames`);
   }
+  keyColor = null;
 
   const ceilingFile = findSheet(dir, 'ceiling');
   if (ceilingFile) {
