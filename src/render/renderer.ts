@@ -216,8 +216,8 @@ export class Renderer {
     this.lights.length = 0;
     const viewer = this.view3d && !this.menu ? this.tvViewer(game) : null;
     if (viewer?.alive) {
-      // The 3D view, at half resolution (at most 480 px wide) for speed and a chunky look.
-      this.drawView(game, viewer, 0, 0, this.playW, h, Math.min(480, Math.round(this.playW / 2)), now, dt);
+      // The 3D view with HD graphics, at one buffer pixel per CSS pixel (at most 960 wide, for speed).
+      this.drawView(game, viewer, 0, 0, this.playW, h, Math.min(720, Math.round(this.playW)), now, dt, true);
     } else {
       this.drawMaze(game, h, now);
       this.drawEntities(game, now);
@@ -899,16 +899,22 @@ export class Renderer {
   /**
    * The sprite for a hero or monster facing (fx, fy): its walk frame for that direction if loaded, otherwise the single
    * front-facing sprite, mirrored when facing left. `phase` advances one frame per unit while walking; null is standing.
+   * With `hd`, the HD image when it has loaded.
    */
-  private look(name: SpriteName, fx: number, fy: number, phase: number | null): { img: HTMLImageElement; flip: boolean } | null {
+  private look(name: SpriteName, fx: number, fy: number, phase: number | null, hd = false): { img: HTMLImageElement; flip: boolean } | null {
     if (isWalker(name)) {
       const { dir, flip } = walkDir(fx, fy);
       const frame = phase === null ? 1 : WALK_CYCLE[Math.floor(phase) % WALK_CYCLE.length];
-      const img = this.sprites.walk(name, dir, frame);
+      const img = this.hdOr(`${name}-${dir}-${frame}`, hd) ?? this.sprites.walk(name, dir, frame);
       if (img) return { img, flip };
     }
-    const img = this.sprites.get(name);
+    const img = this.hdOr(name, hd) ?? this.sprites.get(name);
     return img ? { img, flip: fx < 0 } : null;
+  }
+
+  /** The HD image for a sprite file if `hd` is set and it has loaded. */
+  private hdOr(file: string, hd: boolean): HTMLImageElement | undefined {
+    return hd ? this.sprites.hd(file) : undefined;
   }
 
   /** Gauntlet II states on a hero: the It ball, amulets, stun stars, poison. */
@@ -1293,7 +1299,7 @@ export class Renderer {
   }
 
   /** The hero's first-person view (static if it's dead), drawn into (x, y, w, h) from a buffer `bw` pixels wide. */
-  private drawView(game: GameView, hero: Player, x: number, y: number, w: number, h: number, bw: number, now: number, dt: number): void {
+  private drawView(game: GameView, hero: Player, x: number, y: number, w: number, h: number, bw: number, now: number, dt: number, hd = false): void {
     const { ctx } = this;
     const bh = Math.round((bw * h) / w);
     if (hero.alive) {
@@ -1308,8 +1314,13 @@ export class Renderer {
       this.fpv.render(
         game.level,
         { x: p.x, y: p.y, angle: this.tvAngle, bob },
-        { wall: this.sprites.wall(game.levelNumber), door: this.sprites.get('door'), floor: this.sprites.get('floor'), ceiling: this.sprites.get('ceiling') },
-        this.billboards(game, hero, p, this.tvAngle, now),
+        {
+          wall: (hd ? this.sprites.wall(game.levelNumber, true) : undefined) ?? this.sprites.wall(game.levelNumber),
+          door: this.hdOr('door', hd) ?? this.sprites.get('door'),
+          floor: this.hdOr('floor', hd) ?? this.sprites.get('floor'),
+          ceiling: this.hdOr('ceiling', hd) ?? this.sprites.get('ceiling'),
+        },
+        this.billboards(game, hero, p, this.tvAngle, now, hd),
         bw, bh, forceFieldOn(game.time),
       );
     } else {
@@ -1378,7 +1389,7 @@ export class Renderer {
   }
 
   /** Everything the TV camera can see besides the maze, as billboards relative to the eye. */
-  private billboards(game: GameView, hero: Player, eye: Pos, angle: number, now: number): Billboard[] {
+  private billboards(game: GameView, hero: Player, eye: Pos, angle: number, now: number, hd: boolean): Billboard[] {
     const out: Billboard[] = [];
     const near = (dx: number, dy: number) => dx * dx + dy * dy < 24 * 24 && dx * Math.cos(angle) + dy * Math.sin(angle) > 0;
     // A walker's sheet direction as seen from the eye: its facing relative to the line of sight, turned into the
@@ -1386,16 +1397,16 @@ export class Renderer {
     const seen = (name: SpriteName, fx: number, fy: number, dx: number, dy: number, phase: number | null) => {
       const rel = Math.atan2(fy, fx) - Math.atan2(dy, dx);
       const k = Math.round(rel / (Math.PI / 4));
-      return this.look(name, Math.round(Math.sin((k * Math.PI) / 4)), Math.round(-Math.cos((k * Math.PI) / 4)), phase);
+      return this.look(name, Math.round(Math.sin((k * Math.PI) / 4)), Math.round(-Math.cos((k * Math.PI) / 4)), phase, hd);
     };
 
     for (const [key, it] of game.items) {
       const dx = game.dxw(eye.x, it.x + 0.5);
       const dy = game.dyw(eye.y, it.y + 0.5);
-      const img = this.sprites.get(ITEM_SPRITES[it.kind]);
+      const img = this.hdOr(ITEM_SPRITES[it.kind], hd) ?? this.sprites.get(ITEM_SPRITES[it.kind]);
       if (img && near(dx, dy)) out.push({ dx, dy, img, flip: false, size: 0.42, lift: 0.04 + 0.03 * Math.sin(now * 2.6 + key * 0.7), alpha: 1 });
     }
-    const gen = this.sprites.get('generator');
+    const gen = this.hdOr('generator', hd) ?? this.sprites.get('generator');
     for (const g of game.generators) {
       const dx = game.dxw(eye.x, g.x);
       const dy = game.dyw(eye.y, g.y);

@@ -9,6 +9,7 @@
  * (a 2x2 grid of square textures) as .png or .jpg in <sheet-dir>. Sprites are found as connected blobs of non-magenta pixels and named
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
  * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
+ * HD copies for the 3D view go to public/sprites/hd/: sprites at HD_SIZE, textures (tiles, ceiling) at HD_TEXTURE.
  *
  * ceiling is one square texture (scaled to SIZE). tv is the first-person view's TV set on magenta with its screen
  * flat green: both become transparent (the renderer finds the screen as the hole in the middle), cropped to the set.
@@ -26,7 +27,10 @@ import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 
 const SIZE = 128;
+const HD_SIZE = 256;
+const HD_TEXTURE = 512;
 const OUT = 'public/sprites';
+const HD_OUT = 'public/sprites/hd';
 
 const SHEETS: Record<string, string[]> = {
   heroes: ['warrior', 'valkyrie', 'wizard', 'elf'],
@@ -181,10 +185,10 @@ function gridSprites(png: PNG, cols: number, rows: number, cell = 8): Box[] {
 }
 
 /**
- * Area-average a source box into a SIZE x SIZE image. With `key`, background becomes transparent and the box is padded
- * square (or cut from `crop` instead, still keeping only the pixels inside `box`).
+ * Area-average a source box into a size x size image. With `key`, background becomes transparent and the box is padded
+ * square (or cut from `crop` instead, still keeping only the pixels inside `box`). Scaling up samples the nearest pixel.
  */
-function resample(png: PNG, box: Box, key: boolean, crop?: Box): PNG {
+function resample(png: PNG, box: Box, key: boolean, crop?: Box, size = SIZE): PNG {
   let { x0, y0, x1, y1 } = crop ?? box;
   if (key && !crop) {
     const side = Math.max(x1 - x0, y1 - y0);
@@ -193,14 +197,16 @@ function resample(png: PNG, box: Box, key: boolean, crop?: Box): PNG {
     x1 = cx + side / 2;
     y0 = y1 - side; // bottom-aligned: feet on the floor
   }
-  const out = new PNG({ width: SIZE, height: SIZE });
-  const sx = (x1 - x0) / SIZE;
-  const sy = (y1 - y0) / SIZE;
-  for (let oy = 0; oy < SIZE; oy++) {
-    for (let ox = 0; ox < SIZE; ox++) {
+  const out = new PNG({ width: size, height: size });
+  const sx = (x1 - x0) / size;
+  const sy = (y1 - y0) / size;
+  for (let oy = 0; oy < size; oy++) {
+    for (let ox = 0; ox < size; ox++) {
       let r = 0, g = 0, b = 0, a = 0, n = 0;
-      for (let y = Math.floor(y0 + oy * sy); y < Math.floor(y0 + (oy + 1) * sy); y++) {
-        for (let x = Math.floor(x0 + ox * sx); x < Math.floor(x0 + (ox + 1) * sx); x++) {
+      const ys = Math.floor(y0 + oy * sy);
+      const xs = Math.floor(x0 + ox * sx);
+      for (let y = ys; y < Math.max(ys + 1, Math.floor(y0 + (oy + 1) * sy)); y++) {
+        for (let x = xs; x < Math.max(xs + 1, Math.floor(x0 + (ox + 1) * sx)); x++) {
           n++;
           if (x < 0 || y < 0 || x >= png.width || y >= png.height) continue;
           // Padding to a square must not pull in parts of neighbouring sprites.
@@ -213,7 +219,7 @@ function resample(png: PNG, box: Box, key: boolean, crop?: Box): PNG {
           a++;
         }
       }
-      const o = (oy * SIZE + ox) * 4;
+      const o = (oy * size + ox) * 4;
       const cover = n > 0 ? a / n : 0;
       out.data[o] = a ? r / a : 0;
       out.data[o + 1] = a ? g / a : 0;
@@ -228,13 +234,15 @@ function resample(png: PNG, box: Box, key: boolean, crop?: Box): PNG {
 
 /** Antialiased JPEG edges blend sprite and magenta; pull that pink cast out of pixels near transparency. */
 function despill(png: PNG): void {
-  const alphaAt = (x: number, y: number) => (x < 0 || y < 0 || x >= SIZE || y >= SIZE ? 0 : png.data[(y * SIZE + x) * 4 + 3]);
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
-      const o = (y * SIZE + x) * 4;
+  const size = png.width;
+  const reach = Math.round((2 * size) / SIZE);
+  const alphaAt = (x: number, y: number) => (x < 0 || y < 0 || x >= size || y >= size ? 0 : png.data[(y * size + x) * 4 + 3]);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const o = (y * size + x) * 4;
       if (png.data[o + 3] === 0) continue;
       let edge = png.data[o + 3] < 255;
-      for (let d = 1; d <= 2 && !edge; d++) edge = !alphaAt(x - d, y) || !alphaAt(x + d, y) || !alphaAt(x, y - d) || !alphaAt(x, y + d);
+      for (let d = 1; d <= reach && !edge; d++) edge = !alphaAt(x - d, y) || !alphaAt(x + d, y) || !alphaAt(x, y - d) || !alphaAt(x, y + d);
       if (!edge) continue;
       const [r, g, b] = [png.data[o], png.data[o + 1], png.data[o + 2]];
       const spill = Math.min(r, b) - g;
@@ -293,6 +301,12 @@ function cutout(png: PNG, width: number): PNG {
   return out;
 }
 
+/** Write an output at the normal size and its HD copy at `hd`. */
+function emit(file: string, make: (size: number) => PNG, hd: number): void {
+  writeFileSync(join(OUT, file), PNG.sync.write(make(SIZE)));
+  writeFileSync(join(HD_OUT, file), PNG.sync.write(make(hd)));
+}
+
 function avg(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
@@ -303,7 +317,7 @@ function findSheet(dir: string, name: string): string | undefined {
 
 function main(): void {
   const dir = process.argv[2] ?? 'art/sheets';
-  mkdirSync(OUT, { recursive: true });
+  mkdirSync(HD_OUT, { recursive: true });
 
   for (const [sheet, names] of Object.entries(SHEETS)) {
     const file = findSheet(dir, sheet);
@@ -311,7 +325,7 @@ function main(): void {
     const png = readImage(file);
     const boxes = findSprites(png);
     if (boxes.length !== names.length) console.warn(`${sheet}: found ${boxes.length} sprites, expected ${names.length}`);
-    boxes.slice(0, names.length).forEach((box, i) => writeFileSync(join(OUT, `${names[i]}.png`), PNG.sync.write(resample(png, box, true))));
+    boxes.slice(0, names.length).forEach((box, i) => emit(`${names[i]}.png`, (size) => resample(png, box, true, undefined, size), HD_SIZE));
     console.log(`${sheet}: ${boxes.slice(0, names.length).length} sprites`);
   }
 
@@ -339,7 +353,7 @@ function main(): void {
       const c = i % cols;
       const r = Math.floor(i / cols);
       const crop = { x0: centre[c] - side / 2, x1: centre[c] + side / 2, y0: base[r] - side, y1: base[r] };
-      writeFileSync(join(OUT, `${name.replace(/-diag$/, '')}-${dirs[c]}-${r}.png`), PNG.sync.write(resample(png, box, true, crop)));
+      emit(`${name.replace(/-diag$/, '')}-${dirs[c]}-${r}.png`, (size) => resample(png, box, true, crop, size), HD_SIZE);
     });
     console.log(`walk/${name}: ${boxes.length} frames`);
   }
@@ -348,7 +362,7 @@ function main(): void {
   const ceilingFile = findSheet(dir, 'ceiling');
   if (ceilingFile) {
     const png = readImage(ceilingFile);
-    writeFileSync(join(OUT, 'ceiling.png'), PNG.sync.write(resample(png, { x0: 0, y0: 0, x1: png.width, y1: png.height }, false)));
+    emit('ceiling.png', (size) => resample(png, { x0: 0, y0: 0, x1: png.width, y1: png.height }, false, undefined, size), HD_TEXTURE);
     console.log('ceiling: 1 texture');
   }
 
@@ -368,7 +382,7 @@ function main(): void {
       const qx = (i % 2) * hw;
       const qy = Math.floor(i / 2) * hh;
       const box = { x0: qx + inset, y0: qy + inset, x1: qx + hw - inset, y1: qy + hh - inset };
-      writeFileSync(join(OUT, `${name}.png`), PNG.sync.write(resample(png, box, false)));
+      emit(`${name}.png`, (size) => resample(png, box, false, undefined, size), HD_TEXTURE);
     });
     console.log(`tiles: ${TILES.length} textures`);
   }

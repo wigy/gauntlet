@@ -45,11 +45,13 @@ const WALL_VARIANTS: [SpriteName, number][] = [['wall-orange', 0], ['wall-teal',
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private frames = new Map<string, HTMLImageElement>();
+  /** HD images by file name: null while loading (or if missing). */
+  private hdImages = new Map<string, HTMLImageElement | null>();
   private walls = new Map<number, CanvasImageSource>();
   /** Called whenever another image finishes loading (the editor redraws then; the game redraws every frame anyway). */
   onload: (() => void) | null = null;
 
-  constructor(base = 'sprites/') {
+  constructor(private base = 'sprites/') {
     for (const name of SPRITE_NAMES) {
       const img = new Image();
       img.onload = () => {
@@ -82,13 +84,28 @@ export class Sprites {
     return this.images.get(name);
   }
 
+  /**
+   * The HD copy (sprites/hd/, for the 3D view) of a sprite or walk frame, e.g. 'floor' or 'grunt-se-0'. They're big, so
+   * each loads only when first asked for; undefined until then.
+   */
+  hd(file: string): HTMLImageElement | undefined {
+    const img = this.hdImages.get(file);
+    if (img !== undefined) return img ?? undefined;
+    this.hdImages.set(file, null);
+    const el = new Image();
+    el.onload = () => this.hdImages.set(file, el);
+    el.src = `${this.base}hd/${file}.png`;
+    return undefined;
+  }
+
   /** Wall texture for a level, recoloured with a cached hue-rotated copy so levels don't all look alike. */
-  wall(levelNumber: number): CanvasImageSource | undefined {
+  wall(levelNumber: number, hd = false): CanvasImageSource | undefined {
     const v = mod(levelNumber - 1, WALL_VARIANTS.length);
-    const cached = this.walls.get(v);
+    const key = hd ? -1 - v : v;
+    const cached = this.walls.get(key);
     if (cached) return cached;
     const [name, hue] = WALL_VARIANTS[v];
-    const img = this.get(name);
+    const img = hd ? this.hd(name) : this.get(name);
     if (!img) return undefined;
     if (hue === 0) return img;
     const canvas = document.createElement('canvas');
@@ -97,7 +114,7 @@ export class Sprites {
     const ctx = canvas.getContext('2d')!;
     ctx.filter = `hue-rotate(${hue}deg)`;
     ctx.drawImage(img, 0, 0);
-    this.walls.set(v, canvas);
+    this.walls.set(key, canvas);
     return canvas;
   }
 }
