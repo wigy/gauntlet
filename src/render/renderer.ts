@@ -5,7 +5,7 @@ import { forceFieldOn } from '../core/game';
 import type { Game, Generator, Monster, Player, Shot } from '../core/game';
 import { drawTileOverlay } from './tiles';
 import { Particles, edgeShades, glow, shadowBlob, vignette } from './fx';
-import { Sprites, silhouette } from './sprites';
+import { Sprites, isWalker, silhouette, walkDir } from './sprites';
 import type { SpriteName } from './sprites';
 
 const WALL_COLORS = ['#c0602a', '#3a8a8a', '#7a4ac0', '#a03030', '#4a8a3a', '#b08a2a', '#4a5ab0'];
@@ -23,6 +23,8 @@ const ITEM_GLOW: Record<ItemKind, string> = {
 const HERO_LIGHT = 8;
 const AMBIENT = '#5a566e';
 const HIT_FLASH = 0.14;
+/** Walk frames in order: stride, stand, other stride, stand. */
+const WALK_CYCLE = [0, 1, 2, 1];
 
 interface Pos {
   x: number;
@@ -687,22 +689,26 @@ export class Renderer {
       }
     }
     if (m.kind === 'dragon') this.lights.push({ x: px, y: py, r: tile * 2.5, color: '#ff8030', gr: tile * 1.2, ga: 0.15 });
-    const img = this.sprites.get(m.kind);
-    if (img) {
+    const moving = this.moving(game, m);
+    // Ghosts and Death float, so their robes keep swaying even when they stand still.
+    const floats = m.kind === 'ghost' || m.kind === 'death';
+    const look = this.look(m.kind, m.fx, m.fy, moving || floats ? now * m.def.speed * (moving ? 2.2 : 1) + seed : null);
+    if (look) {
+      const { img, flip } = look;
       const size = tile * (0.95 + 0.1 * m.rank) * scale;
       let lift = 0;
       let sy = 1;
       if (m.kind === 'ghost') {
         lift = (0.5 + 0.5 * Math.sin(now * 4 + seed)) * tile * 0.08;
         ctx.globalAlpha *= 0.88;
-      } else if (this.moving(game, m)) {
+      } else if (moving) {
         lift = Math.abs(Math.sin(now * 11 + seed)) * tile * 0.05;
         sy = 1 + Math.sin(now * 22 + seed) * 0.03;
       } else {
         sy = 1 + Math.sin(now * 3 + seed) * 0.02;
       }
-      this.drawSprite(img, px, py - lift, size, m.fx < 0, sy);
-      this.drawHitFlash(m, img, px, py - lift, size, m.fx < 0, now, sy);
+      this.drawSprite(img, px, py - lift, size, flip, sy);
+      this.drawHitFlash(m, img, px, py - lift, size, flip, now, sy);
       ctx.restore();
       return;
     }
@@ -830,17 +836,18 @@ export class Renderer {
     ctx.ellipse(px, ringY, r * 0.9, r * 0.32, 0, 0, Math.PI * 2);
     ctx.stroke();
 
-    const img = this.sprites.get(p.hero);
-    if (img) {
-      const moving = this.moving(game, p);
+    const moving = this.moving(game, p);
+    const look = this.look(p.hero, p.fx, p.fy, moving ? now * p.def.speed * 2.2 + seed : null);
+    if (look) {
+      const { img, flip } = look;
       const lift = moving ? Math.abs(Math.sin(now * 13 + seed)) * tile * 0.07 : 0;
       const sy = moving ? 1 + Math.sin(now * 26 + seed) * 0.035 : 1 + Math.sin(now * 3 + seed) * 0.015;
       const size = tile * 1.3;
       const shadow = shadowBlob();
       const sw = tile * (0.75 - lift / tile);
       ctx.drawImage(shadow, px - sw / 2, py + tile * 0.38 - sw * 0.17, sw, sw * 0.34);
-      this.drawSprite(img, px, py - lift, size, p.fx < 0, sy);
-      this.drawHitFlash(p, img, px, py - lift, size, p.fx < 0, now, sy, '#ff3030');
+      this.drawSprite(img, px, py - lift, size, flip, sy);
+      this.drawHitFlash(p, img, px, py - lift, size, flip, now, sy, '#ff3030');
       const label = this.me === null ? (this.livingCount(game) > 1 ? `P${p.slot + 1}` : '') : p.controller === this.me ? '' : p.name;
       if (label) this.drawTag(label, p.def.color, px, py - lift - size * 0.55);
       return;
@@ -861,6 +868,21 @@ export class Renderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(p.def.title[0], px, py + 1);
+  }
+
+  /**
+   * The sprite for a hero or monster facing (fx, fy): its walk frame for that direction if loaded, otherwise the single
+   * front-facing sprite, mirrored when facing left. `phase` advances one frame per unit while walking; null is standing.
+   */
+  private look(name: SpriteName, fx: number, fy: number, phase: number | null): { img: HTMLImageElement; flip: boolean } | null {
+    if (isWalker(name)) {
+      const { dir, flip } = walkDir(fx, fy);
+      const frame = phase === null ? 1 : WALK_CYCLE[Math.floor(phase) % WALK_CYCLE.length];
+      const img = this.sprites.walk(name, dir, frame);
+      if (img) return { img, flip };
+    }
+    const img = this.sprites.get(name);
+    return img ? { img, flip: fx < 0 } : null;
   }
 
   /** Gauntlet II states on a hero: the It ball, amulets, stun stars, poison. */

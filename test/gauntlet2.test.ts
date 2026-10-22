@@ -97,8 +97,8 @@ describe('Gauntlet II tiles', () => {
   it('burns heroes in a force field only while it is on', () => {
     const game = joined(`---\n#####\n#S=E#\n#####\n`);
     const p = game.players[0]!;
-    // Step into the field and stand there for a whole on/off cycle.
-    run(game, { dx: 1 }, 16);
+    // Turn, step into the field and stand there for a whole on/off cycle.
+    run(game, { dx: 1 }, 22);
     const x = p.x;
     expect(Math.floor(x)).toBe(2);
     let onHurt = 0;

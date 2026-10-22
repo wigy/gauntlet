@@ -404,7 +404,7 @@ export class Lobby {
       }
       for (const m of game.monsters) {
         if (!near(m.x, m.y)) continue;
-        snap.monsters.push([this.idOf(room, m), m.kind, m.rank, Number.isFinite(m.hp) ? r3(m.hp) : -1, r3(m.x), r3(m.y), m.fx, m.invisible > 0 ? 1 : 0, m.stunned > 0 ? 1 : 0]);
+        snap.monsters.push([this.idOf(room, m), m.kind, m.rank, Number.isFinite(m.hp) ? r3(m.hp) : -1, r3(m.x), r3(m.y), m.fx, m.fy, m.invisible > 0 ? 1 : 0, m.stunned > 0 ? 1 : 0]);
       }
       for (const g of game.generators) {
         if (near(g.x, g.y)) snap.generators.push([this.idOf(room, g), g.kind, r3(g.hp), g.x, g.y]);

@@ -91,8 +91,8 @@ export type PlayerRow = [
   number, string, string, HeroClass, number, number, number, number, number, number, number, number, 0 | 1,
   0 | 1, 0 | 1, AmuletKind | '', number, 0 | 1,
 ];
-/** [id, kind, rank, hp (-1 = immortal), x, y, fx, invisible 0/1, stunned 0/1] */
-export type MonsterRow = [number, MonsterKind, number, number, number, number, number, 0 | 1, 0 | 1];
+/** [id, kind, rank, hp (-1 = immortal), x, y, fx, fy, invisible 0/1, stunned 0/1] */
+export type MonsterRow = [number, MonsterKind, number, number, number, number, number, number, 0 | 1, 0 | 1];
 /** [id, kind, hp, x, y] */
 export type GeneratorRow = [number, MonsterKind, number, number, number];
 /** [id, kind, owner, x, y, vx, vy, ttl] */

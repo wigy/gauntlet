@@ -15,11 +15,34 @@ export const SPRITE_NAMES = [
 
 export type SpriteName = (typeof SPRITE_NAMES)[number];
 
+/** Characters with walk frames, <name>-<dir>-<frame>.png: five directions (the other three are mirrors), three frames. */
+export const WALKERS = [
+  'warrior', 'valkyrie', 'wizard', 'elf',
+  'ghost', 'grunt', 'demon', 'lobber', 'sorcerer', 'death', 'supersorcerer', 'dragon', 'thief',
+] as const;
+export const WALK_DIRS = ['s', 'se', 'e', 'ne', 'n'] as const;
+export const WALK_FRAMES = 3;
+
+export type Walker = (typeof WALKERS)[number];
+export type WalkDir = (typeof WALK_DIRS)[number];
+
+export function isWalker(name: string): name is Walker {
+  return (WALKERS as readonly string[]).includes(name);
+}
+
+/** Sheet direction and mirroring for a facing (fx, fy in -1..1, y down). */
+export function walkDir(fx: number, fy: number): { dir: WalkDir; flip: boolean } {
+  const x = Math.abs(fx);
+  const dir: WalkDir = fy > 0 ? (x ? 'se' : 's') : fy < 0 ? (x ? 'ne' : 'n') : x ? 'e' : 's';
+  return { dir, flip: fx < 0 };
+}
+
 /** Wall looks per level: [texture, hue rotation in degrees]. */
 const WALL_VARIANTS: [SpriteName, number][] = [['wall-orange', 0], ['wall-teal', 0], ['wall-orange', 230], ['wall-orange', -25], ['wall-teal', 90], ['wall-orange', 60]];
 
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
+  private frames = new Map<string, HTMLImageElement>();
   private walls = new Map<number, CanvasImageSource>();
   /** Called whenever another image finishes loading (the editor redraws then; the game redraws every frame anyway). */
   onload: (() => void) | null = null;
@@ -33,6 +56,24 @@ export class Sprites {
       };
       img.src = `${base}${name}.png`;
     }
+    for (const name of WALKERS) {
+      for (const dir of WALK_DIRS) {
+        for (let f = 0; f < WALK_FRAMES; f++) {
+          const key = `${name}-${dir}-${f}`;
+          const img = new Image();
+          img.onload = () => {
+            this.frames.set(key, img);
+            this.onload?.();
+          };
+          img.src = `${base}${key}.png`;
+        }
+      }
+    }
+  }
+
+  /** One walk frame (0..2, 1 = standing), or undefined if it hasn't loaded. */
+  walk(name: Walker, dir: WalkDir, frame: number): HTMLImageElement | undefined {
+    return this.frames.get(`${name}-${dir}-${frame}`);
   }
 
   get(name: SpriteName): HTMLImageElement | undefined {

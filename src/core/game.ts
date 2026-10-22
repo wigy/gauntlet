@@ -3,7 +3,7 @@ import {
   DIZZY_TIME, DRAGON_POINTS, ENTITY_RADIUS, MAGIC_STUN, SUPER_SHOTS, FOOD_HEALTH, FORCE_FIELD_DPS, FORCE_FIELD_PERIOD, GENERATOR_HP_PER_RANK,
   HEALTH_DRAIN_PER_SEC, HERO_ORDER, HEROES, JOIN_HEALTH, LOW_HEALTH_WARNING, MAX_MONSTERS, MAX_SHOTS_PER_PLAYER,
   MELEE_COOLDOWN, MONSTERS, MONSTER_HIT_COOLDOWN, POISON_HEALTH, SHOT_COOLDOWN, SHOT_RADIUS, STUN_GRACE, STUN_TIME,
-  THIEF_INTERVAL, THIEF_STEAL_POINTS, TREASURE_POINTS, WALLS_TO_EXITS_TIME,
+  THIEF_INTERVAL, THIEF_STEAL_POINTS, TREASURE_POINTS, TURN_TIME, WALLS_TO_EXITS_TIME,
 } from './defs';
 import type { AmuletKind, HeroClass, HeroDef, ItemKind, MonsterDef, MonsterKind } from './defs';
 import { Tile, isEmptyLevel, isSolid, levelTitle, mod, parseLevel, populate, tileAt } from './level';
@@ -30,8 +30,11 @@ export interface Player {
   def: HeroDef;
   x: number;
   y: number;
+  /** Facing, each -1..1 (one of eight directions). */
   fx: number;
   fy: number;
+  /** Seconds left turning to a new facing; no walking until it's done. */
+  turn: number;
   health: number;
   score: number;
   keys: number;
@@ -75,6 +78,8 @@ export interface Monster {
   y: number;
   fx: number;
   fy: number;
+  /** Seconds left turning to a new facing, as for heroes. */
+  turn: number;
   hitCooldown: number;
   shotCooldown: number;
   /** Sorcerers blink: while > 0 they are invisible and shots pass through. */
@@ -229,6 +234,7 @@ export class Game {
       p.y = pos.y;
       p.fx = 0;
       p.fy = 1;
+      p.turn = 0;
       p.it = false;
       p.stun = 0;
       p.portedTo = -1;
@@ -254,7 +260,7 @@ export class Game {
   private addMonster(kind: MonsterKind, rank: number, x: number, y: number): Monster {
     const def = MONSTERS[kind];
     const m: Monster = {
-      kind, def, rank, x, y, fx: 0, fy: 1,
+      kind, def, rank, x, y, fx: 0, fy: 1, turn: 0,
       hp: kind === 'death' || kind === 'acid' ? Infinity : def.hp ?? def.hpPerRank * rank,
       hitCooldown: 0, shotCooldown: 1 + this.rng.next() * 2, invisible: 0, blinkTimer: 1 + this.rng.next() * 2,
       drained: 0, wander: 0, wdx: 0, wdy: 0, dead: false, bucket: -1, loot: null, life: Infinity, stunned: 0,
@@ -313,7 +319,7 @@ export class Game {
       hero = HERO_ORDER.find((h) => !this.players.some((p) => p?.hero === h)) ?? HERO_ORDER[slot];
     }
     const p: Player = {
-      slot, controller, name, hero, def: HEROES[hero], x: 0, y: 0, fx: 0, fy: 1, health: 0, score: 0, keys: 0, potions: 0,
+      slot, controller, name, hero, def: HEROES[hero], x: 0, y: 0, fx: 0, fy: 1, turn: 0, health: 0, score: 0, keys: 0, potions: 0,
       alive: false, shotCooldown: 0, meleeCooldown: 0, drainAcc: 0, warned: 0, prevMagic: false, ...freshEffects(),
     };
     this.players[slot] = p;
@@ -365,7 +371,7 @@ export class Game {
       const hero = HERO_ORDER.find((h) => !this.players.some((p) => p?.hero === h)) ?? HERO_ORDER[slot];
       const def = HEROES[hero];
       const p: Player = {
-        slot, controller, name: '', hero, def, x: 0, y: 0, fx: 0, fy: 1, health: 0, score: 0, keys: 0, potions: 0,
+        slot, controller, name: '', hero, def, x: 0, y: 0, fx: 0, fy: 1, turn: 0, health: 0, score: 0, keys: 0, potions: 0,
         alive: false, shotCooldown: 0, meleeCooldown: 0, drainAcc: 0, warned: 0, prevMagic: input.magic, ...freshEffects(),
       };
       this.players[slot] = p;
@@ -401,6 +407,7 @@ export class Game {
     p.stun = Math.max(0, p.stun - TICK);
     p.stunGrace = Math.max(0, p.stunGrace - TICK);
     p.dizzy = Math.max(0, p.dizzy - TICK);
+    p.turn = Math.max(0, p.turn - TICK);
     // Transportability runs out only once the hero is out of the wall it was walking through; super shots run out
     // by use.
     if (p.amulet && p.amulet !== 'supershot' && (p.amulet !== 'transport' || !this.tileBlocked(p.x, p.y, ENTITY_RADIUS))) {
@@ -419,9 +426,11 @@ export class Game {
     const sign = p.dizzy > 0 ? -1 : 1;
     let dx = stunned ? 0 : sign * Math.sign(Math.round(input.dx * 1.4));
     let dy = stunned ? 0 : sign * Math.sign(Math.round(input.dy * 1.4));
-    if (dx || dy) {
+    // A new direction turns the hero first; walking starts once the turn is done.
+    if ((dx || dy) && (dx !== p.fx || dy !== p.fy)) {
       p.fx = dx;
       p.fy = dy;
+      p.turn = TURN_TIME;
     }
 
     // As in the arcade: holding fire plants you in place and shoots in the stick direction.
@@ -445,7 +454,7 @@ export class Game {
     if (input.magic && !p.prevMagic && !stunned) this.useMagic(p);
     p.prevMagic = input.magic;
 
-    if (dx || dy) {
+    if ((dx || dy) && p.turn <= 0) {
       const len = Math.hypot(dx, dy);
       const sp = (p.def.speed * TICK) / len;
       this.movePlayerAxis(p, dx * sp, 0);
@@ -704,8 +713,11 @@ export class Game {
       }
     }
 
-    let mx = Math.abs(dx) > 0.3 ? Math.sign(dx) : 0;
-    let my = Math.abs(dy) > 0.3 ? Math.sign(dy) : 0;
+    // A little hysteresis, so a monster closing in at a shallow angle doesn't keep stopping to turn back and forth
+    // between straight and diagonal.
+    const axis = (d: number, f: number) => (Math.abs(d) > 0.3 || (Math.abs(d) > 0.1 && f === Math.sign(d)) ? Math.sign(d) : 0);
+    let mx = axis(dx, m.fx);
+    let my = axis(dy, m.fy);
     // Thieves run off with their loot; everyone keeps away from a repulsive hero.
     if ((m.kind === 'thief' && m.loot) || (target.p.amulet === 'repulsive' && dist < 7)) {
       mx = -mx;
@@ -750,8 +762,15 @@ export class Game {
       my = m.wdy;
     }
     if (!mx && !my) return;
-    m.fx = mx;
-    m.fy = my;
+    if (mx !== m.fx || my !== m.fy) {
+      m.fx = mx;
+      m.fy = my;
+      m.turn = TURN_TIME;
+    }
+    if (m.turn > 0) {
+      m.turn -= TICK;
+      return;
+    }
     const len = Math.hypot(mx, my);
     const sp = (m.def.speed * TICK) / len;
     const movedX = this.moveMonsterAxis(m, mx * sp, 0);

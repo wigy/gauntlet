@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game, TICK } from '../src/core/game';
 import type { PlayerInput } from '../src/core/game';
-import { FOOD_HEALTH, JOIN_HEALTH } from '../src/core/defs';
+import { FOOD_HEALTH, JOIN_HEALTH, TURN_TIME } from '../src/core/defs';
 
 const idle: PlayerInput = { dx: 0, dy: 0, fire: false, magic: false };
 
@@ -69,6 +69,42 @@ describe('Game', () => {
     run(game, { dx: 1 }, Math.round(2 / TICK));
     expect(game.players[0]!.keys).toBe(0);
     expect(game.level.tiles[1 * game.level.width + 4]).toBe(0);
+  });
+
+  it('turns to face a new direction before walking that way', () => {
+    const game = joined(CORRIDOR);
+    const p = game.players[0]!;
+    const turnTicks = Math.round(TURN_TIME / TICK);
+    run(game, { dx: 1 }, turnTicks);
+    expect(p.fx).toBe(1);
+    expect(p.fy).toBe(0);
+    expect(p.x).toBeCloseTo(1.5);
+    run(game, { dx: 1 }, 10);
+    expect(p.x).toBeGreaterThan(1.6);
+    // Same direction again after stopping: no turn.
+    run(game, {}, 5);
+    const x = p.x;
+    run(game, { dx: 1 }, 1);
+    expect(p.x).toBeGreaterThan(x);
+    // A tap turns the hero without moving it.
+    run(game, { dx: -1 }, 2);
+    expect(p.fx).toBe(-1);
+    expect(p.x).toBeGreaterThan(x);
+  });
+
+  it('turns monsters before they walk', () => {
+    const game = joined(`---
+##########
+#S......G#
+##########
+`);
+    const ghost = game.monsters[0];
+    const x = ghost.x;
+    run(game, {}, Math.round(TURN_TIME / TICK) - 1);
+    expect(ghost.fx).toBe(-1);
+    expect(ghost.x).toBe(x);
+    run(game, {}, 10);
+    expect(ghost.x).toBeLessThan(x);
   });
 
   it('wraps around the maze edge', () => {

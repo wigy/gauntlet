@@ -70,7 +70,7 @@ export class Mirror {
     for (const [slot, controller, name, hero, x, y, fx, fy, health, score, keys, potions, alive, stun, dizzy, amulet, amuletTime, it] of s.players) {
       const old = this.players[slot];
       const p: Player = old && old.controller === controller ? old : {
-        slot, controller, name, hero, def: HEROES[hero], x, y, fx, fy, health, score, keys, potions, alive: !!alive,
+        slot, controller, name, hero, def: HEROES[hero], x, y, fx, fy, turn: 0, health, score, keys, potions, alive: !!alive,
         shotCooldown: 0, meleeCooldown: 0, drainAcc: 0, warned: 0, prevMagic: false,
         stun: 0, stunGrace: 0, dizzy: 0, amulet: null, amuletTime: 0, it: false, portedTo: -1,
       };
@@ -82,12 +82,12 @@ export class Mirror {
     }
     this.players = players;
 
-    this.monsters = this.sync(this.monsterById, s.monsters, ([id, kind, rank, hp, x, y, fx, inv, stunned], old) => {
+    this.monsters = this.sync(this.monsterById, s.monsters, ([id, kind, rank, hp, x, y, fx, fy, inv, stunned], old) => {
       const m: Monster = old ?? {
-        kind, def: MONSTERS[kind], rank, hp, x, y, fx, fy: 1, hitCooldown: 0, shotCooldown: 0, invisible: 0, blinkTimer: 0,
+        kind, def: MONSTERS[kind], rank, hp, x, y, fx, fy, turn: 0, hitCooldown: 0, shotCooldown: 0, invisible: 0, blinkTimer: 0,
         drained: 0, wander: 0, wdx: 0, wdy: 0, dead: false, bucket: -1, loot: null, life: Infinity, stunned: 0,
       };
-      Object.assign(m, { rank, hp: hp < 0 ? Infinity : hp, x, y, fx, invisible: inv ? 1 : 0, stunned });
+      Object.assign(m, { rank, hp: hp < 0 ? Infinity : hp, x, y, fx, fy, invisible: inv ? 1 : 0, stunned });
       return [id, m];
     });
     this.generators = this.sync(this.generatorById, s.generators, ([id, kind, hp, x, y], old) => {

@@ -9,8 +9,12 @@
  * (a 2x2 grid of square textures) as .png or .jpg in <sheet-dir>. Sprites are found as connected blobs of non-magenta pixels and named
  * in reading order (rows top to bottom, then left to right) using SHEETS below; textures are cut from the quadrants.
  * Everything is downscaled to SIZE px with soft (area-coverage) alpha and the magenta fringe removed from the edges.
+ *
+ * <sheet-dir>/walk/<name>.png|jpg are walk sheets: one character in a 5x3 grid, columns facing WALK_DIRS (the other
+ * three directions are mirrors), rows the walk frames. They become <name>-<dir>-<frame>.png. All frames of a sheet
+ * share one scale, each column one horizontal centre and each row one baseline, so the animation doesn't jitter.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
@@ -26,6 +30,8 @@ const SHEETS: Record<string, string[]> = {
   'g2-items': ['amulet', 'poison', 'it'],
 };
 const TILES = ['wall-orange', 'floor', 'wall-teal', 'door'];
+const WALK_DIRS = ['s', 'se', 'e', 'ne', 'n'];
+const WALK_FRAMES = 3;
 
 interface Box {
   x0: number;
@@ -105,10 +111,62 @@ function findSprites(png: PNG, cell = 8): Box[] {
   return rows.flatMap((r) => r.sort((a, b) => a.x0 - b.x0));
 }
 
-/** Area-average a source box into a SIZE x SIZE image. With `key`, background becomes transparent and the box is padded square. */
-function resample(png: PNG, box: Box, key: boolean): PNG {
-  let { x0, y0, x1, y1 } = box;
-  if (key) {
+/**
+ * Sprites laid out in a cols x rows grid, which may be too tight for findSprites (a weapon nearly touching the next
+ * figure). The grid lines go through the emptiest columns and rows of pixels near where even spacing puts them, and
+ * each sprite is the bounding box of the foreground in its cell. Reading order, like findSprites.
+ */
+function gridSprites(png: PNG, cols: number, rows: number, cell = 8): Box[] {
+  const gw = Math.ceil(png.width / cell);
+  const gh = Math.ceil(png.height / cell);
+  const fg = new Uint16Array(gw * gh);
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (!isBackground(png, (y * png.width + x) * 4)) fg[Math.floor(y / cell) * gw + Math.floor(x / cell)]++;
+    }
+  }
+  const on = (gx: number, gy: number) => fg[gy * gw + gx] > cell;
+  const cuts = (n: number, len: number, count: (i: number) => number) => {
+    const out = [0];
+    for (let k = 1; k < n; k++) {
+      const mid = Math.round((k * len) / n);
+      const reach = Math.round(len / n / 4);
+      let best = mid;
+      for (let i = mid - reach; i <= mid + reach; i++) if (count(i) < count(best)) best = i;
+      out.push(best);
+    }
+    out.push(len);
+    return out;
+  };
+  const xs = cuts(cols, gw, (gx) => Array.from({ length: gh }, (_, gy) => +on(gx, gy)).reduce((a, b) => a + b, 0));
+  const ys = cuts(rows, gh, (gy) => Array.from({ length: gw }, (_, gx) => +on(gx, gy)).reduce((a, b) => a + b, 0));
+  const boxes: Box[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const box: Box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+      for (let gy = ys[r]; gy < ys[r + 1]; gy++) {
+        for (let gx = xs[c]; gx < xs[c + 1]; gx++) {
+          if (!on(gx, gy)) continue;
+          box.x0 = Math.min(box.x0, gx * cell);
+          box.y0 = Math.min(box.y0, gy * cell);
+          box.x1 = Math.max(box.x1, Math.min(png.width, (gx + 1) * cell));
+          box.y1 = Math.max(box.y1, Math.min(png.height, (gy + 1) * cell));
+        }
+      }
+      if (box.x0 === Infinity) throw new Error(`no sprite in grid cell ${c},${r}`);
+      boxes.push(box);
+    }
+  }
+  return boxes;
+}
+
+/**
+ * Area-average a source box into a SIZE x SIZE image. With `key`, background becomes transparent and the box is padded
+ * square (or cut from `crop` instead, still keeping only the pixels inside `box`).
+ */
+function resample(png: PNG, box: Box, key: boolean, crop?: Box): PNG {
+  let { x0, y0, x1, y1 } = crop ?? box;
+  if (key && !crop) {
     const side = Math.max(x1 - x0, y1 - y0);
     const cx = (x0 + x1) / 2;
     x0 = cx - side / 2;
@@ -167,6 +225,10 @@ function despill(png: PNG): void {
   }
 }
 
+function avg(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
 function findSheet(dir: string, name: string): string | undefined {
   return ['png', 'jpg', 'jpeg'].map((ext) => join(dir, `${name}.${ext}`)).find((f) => existsSync(f));
 }
@@ -183,6 +245,26 @@ function main(): void {
     if (boxes.length !== names.length) console.warn(`${sheet}: found ${boxes.length} sprites, expected ${names.length}`);
     boxes.slice(0, names.length).forEach((box, i) => writeFileSync(join(OUT, `${names[i]}.png`), PNG.sync.write(resample(png, box, true))));
     console.log(`${sheet}: ${boxes.slice(0, names.length).length} sprites`);
+  }
+
+  const walkDir = join(dir, 'walk');
+  const walkSheets = existsSync(walkDir) ? [...new Set(readdirSync(walkDir).map((f) => f.replace(/\.(png|jpe?g)$/, '')))] : [];
+  for (const name of walkSheets.sort()) {
+    const file = findSheet(walkDir, name);
+    if (!file) continue;
+    const png = readImage(file);
+    const cols = WALK_DIRS.length;
+    const boxes = gridSprites(png, cols, WALK_FRAMES);
+    const side = Math.max(...boxes.map((b) => Math.max(b.x1 - b.x0, b.y1 - b.y0)));
+    const centre = WALK_DIRS.map((_, c) => avg([0, 1, 2].map((r) => (boxes[r * cols + c].x0 + boxes[r * cols + c].x1) / 2)));
+    const base = [0, 1, 2].map((r) => Math.max(...boxes.slice(r * cols, (r + 1) * cols).map((b) => b.y1)));
+    boxes.forEach((box, i) => {
+      const c = i % cols;
+      const r = Math.floor(i / cols);
+      const crop = { x0: centre[c] - side / 2, x1: centre[c] + side / 2, y0: base[r] - side, y1: base[r] };
+      writeFileSync(join(OUT, `${name}-${WALK_DIRS[c]}-${r}.png`), PNG.sync.write(resample(png, box, true, crop)));
+    });
+    console.log(`walk/${name}: ${boxes.length} frames`);
   }
 
   const tilesFile = findSheet(dir, 'tiles');

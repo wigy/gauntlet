@@ -91,6 +91,8 @@ export const MAX_MONSTERS = 220;
 export const MAX_SHOTS_PER_PLAYER = 2;
 export const SHOT_COOLDOWN = 0.22;
 export const MELEE_COOLDOWN = 0.25;
+/** Seconds a hero or monster spends turning to face a new direction before it starts walking that way. */
+export const TURN_TIME = 0.1;
 export const MONSTER_HIT_COOLDOWN = 0.6;
 export const GENERATOR_HP_PER_RANK = 3;
 export const ENTITY_RADIUS = 0.38;
