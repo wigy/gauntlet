@@ -13,6 +13,7 @@
     "import:g1": "tsx tools/import-vgmaps.ts",
     "import:g2": "tsx tools/import-g2.ts",
     "sprites": "tsx tools/slice-sprites.ts",
+    "catalog": "tsx tools/level-catalog.ts",
     "start": "tsx server/main.ts"
   },
   "devDependencies": {
